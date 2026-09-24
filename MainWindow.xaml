@@ -1,0 +1,735 @@
+<Window x:Class="ThermalScope.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="ThermalScope"
+        Width="1180"
+        Height="780"
+        MinWidth="1000"
+        MinHeight="680"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        FontFamily="Segoe UI"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        Loaded="Window_Loaded">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="0"
+                      ResizeBorderThickness="8"
+                      GlassFrameThickness="0" />
+    </WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <Style x:Key="CardStyle" TargetType="Border">
+            <Setter Property="Background" Value="#11192B" />
+            <Setter Property="BorderBrush" Value="#202C45" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+        </Style>
+
+        <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#EDF2FF" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style x:Key="MetricLabelStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#7E8BA5" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+        </Style>
+
+        <Style x:Key="MetricValueStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#EDF2FF" />
+            <Setter Property="FontSize" Value="27" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,5,0,0" />
+        </Style>
+
+        <Style x:Key="MutedTextStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#7E8BA5" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <Style x:Key="DarkTextBox" TargetType="TextBox">
+            <Setter Property="Background" Value="#0D1628" />
+            <Setter Property="Foreground" Value="#EDF2FF" />
+            <Setter Property="BorderBrush" Value="#2A3754" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <Style x:Key="DarkComboBox" TargetType="ComboBox">
+            <Setter Property="Background" Value="#0D1628" />
+            <Setter Property="Foreground" Value="#EDF2FF" />
+            <Setter Property="BorderBrush" Value="#2A3754" />
+            <Setter Property="Padding" Value="8,6" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <Style x:Key="DarkListBox" TargetType="ListBox">
+            <Setter Property="Background" Value="#0D1628" />
+            <Setter Property="Foreground" Value="#EDF2FF" />
+            <Setter Property="BorderBrush" Value="#263450" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="4" />
+        </Style>
+
+        <Style x:Key="GhostButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="#C8D2E7" />
+            <Setter Property="Background" Value="#151E32" />
+            <Setter Property="BorderBrush" Value="#2A3754" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="12,7" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonSurface"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonSurface" Property="Background" Value="#1D2A45" />
+                                <Setter TargetName="ButtonSurface" Property="BorderBrush" Value="#4D5E86" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonSurface" Property="Background" Value="#263657" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="WindowButtonStyle" TargetType="Button" BasedOn="{StaticResource GhostButtonStyle}">
+            <Setter Property="Width" Value="32" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="Margin" Value="5,0,0,0" />
+        </Style>
+
+        <DataTemplate x:Key="SensorRowTemplate">
+            <Border Background="#141E32"
+                    BorderBrush="#202D47"
+                    BorderThickness="1"
+                    CornerRadius="9"
+                    Padding="12,9"
+                    Margin="0,0,0,7">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="72" />
+                        <ColumnDefinition Width="38" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Name}"
+                                   Foreground="#E7EDFA"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Detail}"
+                                   Foreground="#72809B"
+                                   FontSize="10"
+                                   Margin="0,3,0,0"
+                                   TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding Value}"
+                               Foreground="#E7EDFA"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2"
+                               Text="{Binding Unit}"
+                               Foreground="#7E8BA5"
+                               FontSize="10"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate x:Key="GameProcessTemplate">
+            <Grid Margin="7,5">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="{Binding Name}"
+                               Foreground="#E7EDFA"
+                               FontSize="12"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding Title}"
+                               Foreground="#72809B"
+                               FontSize="10"
+                               Margin="0,3,0,0"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <TextBlock Grid.Column="1"
+                           Text="{Binding Detail}"
+                           Foreground="#7E8BA5"
+                           FontSize="10"
+                           VerticalAlignment="Center"
+                           Margin="10,0,4,0" />
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Border Margin="10" Background="Transparent">
+        <Border Background="{StaticResource PageBrush}"
+                BorderBrush="#26324B"
+                BorderThickness="1"
+                CornerRadius="18">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="68" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="38" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Margin="26,16,18,12" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="THERMALSCOPE"
+                                   Foreground="#F3F6FF"
+                                   FontSize="20"
+                                   FontWeight="Bold" />
+                        <TextBlock Text="CPU + GPU hardware telemetry"
+                                   Foreground="#7E8BA5"
+                                   FontSize="11"
+                                   Margin="0,3,0,0" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Background="#122B2B"
+                                BorderBrush="#1D5B55"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="10,6"
+                                Margin="0,0,12,0">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse x:Name="LiveDot"
+                                         Width="7"
+                                         Height="7"
+                                         Fill="#57D9A3"
+                                         Margin="0,0,7,0" />
+                                <TextBlock x:Name="HeaderStatusText"
+                                           Text="CONNECTING"
+                                           Foreground="#7EE5BB"
+                                           FontSize="10"
+                                           FontWeight="SemiBold" />
+                            </StackPanel>
+                        </Border>
+                        <Button x:Name="IntervalButton"
+                                Content="2 sec"
+                                Style="{StaticResource GhostButtonStyle}"
+                                Click="IntervalButton_Click"
+                                ToolTip="Change refresh interval" />
+                        <Button x:Name="RefreshButton"
+                                Content="↻  Refresh"
+                                Style="{StaticResource GhostButtonStyle}"
+                                Click="RefreshButton_Click"
+                                ToolTip="Refresh now" />
+                        <Button x:Name="MinimizeButton"
+                                Content="—"
+                                Style="{StaticResource WindowButtonStyle}"
+                                Click="MinimizeButton_Click"
+                                ToolTip="Minimize" />
+                        <Button x:Name="CloseButton"
+                                Content="×"
+                                Style="{StaticResource WindowButtonStyle}"
+                                Click="CloseButton_Click"
+                                ToolTip="Close" />
+                    </StackPanel>
+                </Grid>
+
+                <ScrollViewer Grid.Row="1"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Padding="0,0,0,0">
+                    <Grid Margin="26,3,26,24">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.55*" />
+                            <ColumnDefinition Width="20" />
+                            <ColumnDefinition Width="1*" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0">
+                            <Grid Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="OVERVIEW"
+                                               Style="{StaticResource MetricLabelStyle}" />
+                                    <TextBlock Text="Live component health"
+                                               Style="{StaticResource SectionTitleStyle}"
+                                               Margin="0,5,0,0" />
+                                </StackPanel>
+                                <TextBlock x:Name="SummaryText"
+                                           Text="Waiting for hardware…"
+                                           Foreground="#8492AE"
+                                           FontSize="12"
+                                           VerticalAlignment="Bottom"
+                                           HorizontalAlignment="Right"
+                                           TextTrimming="CharacterEllipsis" />
+                            </Grid>
+
+                            <Border Style="{StaticResource CardStyle}" Padding="22" Margin="0,0,0,16">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid>
+                                        <StackPanel>
+                                            <TextBlock Text="CPU"
+                                                       Foreground="#8EA0FF"
+                                                       FontSize="11"
+                                                       FontWeight="Bold" />
+                                            <TextBlock x:Name="CpuNameText"
+                                                       Text="Detecting processor…"
+                                                       Foreground="#EDF2FF"
+                                                       FontSize="17"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,5,0,0"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                        <Border HorizontalAlignment="Right"
+                                                VerticalAlignment="Top"
+                                                Background="#172A36"
+                                                BorderBrush="#20504B"
+                                                BorderThickness="1"
+                                                CornerRadius="7"
+                                                Padding="9,5">
+                                            <TextBlock x:Name="CpuHealthText"
+                                                       Text="ONLINE"
+                                                       Foreground="#71DDB5"
+                                                       FontSize="10"
+                                                       FontWeight="SemiBold" />
+                                        </Border>
+                                    </Grid>
+                                    <Grid Grid.Row="1" Margin="0,22,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="28" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="USAGE" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="CpuUsageText"
+                                                       Text="—"
+                                                       Style="{StaticResource MetricValueStyle}" />
+                                            <ProgressBar x:Name="CpuUsageBar"
+                                                         Height="7"
+                                                         Minimum="0"
+                                                         Maximum="100"
+                                                         Value="0"
+                                                         Foreground="#7C8CFF"
+                                                         Background="#1D2942"
+                                                         BorderThickness="0"
+                                                         Margin="0,10,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="PACKAGE TEMP" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="CpuTempText"
+                                                       Text="—"
+                                                       Style="{StaticResource MetricValueStyle}" />
+                                            <TextBlock x:Name="CpuTempStateText"
+                                                       Text="WAITING"
+                                                       Foreground="#7E8BA5"
+                                                       FontSize="11"
+                                                       Margin="0,10,0,0" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <Grid Grid.Row="2" Margin="0,20,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="CLOCK" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="CpuClockText"
+                                                       Text="—"
+                                                       Foreground="#D7E0F2"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,5,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="POWER" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="CpuPowerText"
+                                                       Text="—"
+                                                       Foreground="#D7E0F2"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,5,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="TEMP SENSOR" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="CpuTempSourceText"
+                                                       Text="—"
+                                                       Foreground="#D7E0F2"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,5,0,0"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Grid>
+                            </Border>
+
+                            <Border Style="{StaticResource CardStyle}" Padding="22">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid>
+                                        <StackPanel>
+                                            <TextBlock Text="GPU"
+                                                       Foreground="#54D6C2"
+                                                       FontSize="11"
+                                                       FontWeight="Bold" />
+                                            <TextBlock x:Name="GpuNameText"
+                                                       Text="Detecting graphics adapter…"
+                                                       Foreground="#EDF2FF"
+                                                       FontSize="17"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,5,0,0"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                        <Border HorizontalAlignment="Right"
+                                                VerticalAlignment="Top"
+                                                Background="#172A36"
+                                                BorderBrush="#20504B"
+                                                BorderThickness="1"
+                                                CornerRadius="7"
+                                                Padding="9,5">
+                                            <TextBlock x:Name="GpuHealthText"
+                                                       Text="ONLINE"
+                                                       Foreground="#71DDB5"
+                                                       FontSize="10"
+                                                       FontWeight="SemiBold" />
+                                        </Border>
+                                    </Grid>
+                                    <Grid Grid.Row="1" Margin="0,22,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="28" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="USAGE" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="GpuUsageText"
+                                                       Text="—"
+                                                       Style="{StaticResource MetricValueStyle}" />
+                                            <ProgressBar x:Name="GpuUsageBar"
+                                                         Height="7"
+                                                         Minimum="0"
+                                                         Maximum="100"
+                                                         Value="0"
+                                                         Foreground="#4CCFBE"
+                                                         Background="#1D2942"
+                                                         BorderThickness="0"
+                                                         Margin="0,10,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="CORE TEMP" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="GpuTempText"
+                                                       Text="—"
+                                                       Style="{StaticResource MetricValueStyle}" />
+                                            <TextBlock x:Name="GpuTempStateText"
+                                                       Text="WAITING"
+                                                       Foreground="#7E8BA5"
+                                                       FontSize="11"
+                                                       Margin="0,10,0,0" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <Grid Grid.Row="2" Margin="0,20,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="CLOCK" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="GpuClockText"
+                                                       Text="—"
+                                                       Foreground="#D7E0F2"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,5,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="POWER" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="GpuPowerText"
+                                                       Text="—"
+                                                       Foreground="#D7E0F2"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,5,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="TEMP SENSOR" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="GpuTempSourceText"
+                                                       Text="—"
+                                                       Foreground="#D7E0F2"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,5,0,0"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Grid>
+                            </Border>
+
+                            <Border Style="{StaticResource CardStyle}" Padding="22" Margin="0,16,0,0">
+                                <StackPanel>
+                                    <Grid>
+                                        <StackPanel>
+                                            <TextBlock Text="GAME FPS"
+                                                       Foreground="#F2B66D"
+                                                       FontSize="11"
+                                                       FontWeight="Bold" />
+                                            <TextBlock Text="Standalone DirectX monitor"
+                                                       Style="{StaticResource SectionTitleStyle}"
+                                                       Margin="0,5,0,0" />
+                                        </StackPanel>
+                                        <Border HorizontalAlignment="Right"
+                                                VerticalAlignment="Top"
+                                                Background="#172A36"
+                                                BorderBrush="#20504B"
+                                                BorderThickness="1"
+                                                CornerRadius="7"
+                                                Padding="9,5">
+                                            <TextBlock x:Name="FpsMonitorStatusText"
+                                                       Text="DX11/DX12: checking…"
+                                                       Foreground="#71DDB5"
+                                                       FontSize="10"
+                                                       FontWeight="SemiBold" />
+                                        </Border>
+                                    </Grid>
+                                    <TextBlock x:Name="GameStatusText"
+                                               Text="Select a game executable to monitor."
+                                               Foreground="#D7E0F2"
+                                               FontSize="12"
+                                               Margin="0,13,0,0"
+                                               TextWrapping="Wrap" />
+                                    <Grid Margin="0,15,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="145" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="CURRENT FPS" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="GameCurrentFpsText"
+                                                       Text="—"
+                                                       Foreground="#54D6C2"
+                                                       FontSize="27"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,5,0,0" />
+                                            <TextBlock x:Name="GameMonitorStateText"
+                                                       Text="No game selected"
+                                                       Foreground="#72809B"
+                                                       FontSize="10"
+                                                       Margin="0,7,0,0"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="PROCESS" Style="{StaticResource MetricLabelStyle}" />
+                                            <TextBlock x:Name="GameMonitorProcessText"
+                                                       Text="No game selected"
+                                                       Foreground="#D7E0F2"
+                                                       FontSize="13"
+                                                       FontWeight="SemiBold"
+                                                       Margin="0,7,0,0"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBlock Text="GAME EXECUTABLE"
+                                               Style="{StaticResource MetricLabelStyle}"
+                                               Margin="0,15,0,0" />
+                                    <TextBox x:Name="GameExecutableTextBox"
+                                             Style="{StaticResource DarkTextBox}"
+                                             Text=""
+                                             ToolTip="Example: Game.exe" />
+                                    <CheckBox x:Name="AutoMonitorCheckBox"
+                                              Content="Monitor automatically while the selected game is running"
+                                              Foreground="#9BA8C0"
+                                              FontSize="11"
+                                              IsChecked="True"
+                                              Margin="0,13,0,0" />
+                                    <Grid Margin="0,12,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="110" />
+                                        </Grid.ColumnDefinitions>
+                                        <Button x:Name="MonitorGameButton"
+                                                Content="Monitor FPS"
+                                                Style="{StaticResource GhostButtonStyle}"
+                                                Click="MonitorGameButton_Click"
+                                                Margin="0,0,8,0" />
+                                        <Button x:Name="StopGameMonitorButton"
+                                                Grid.Column="1"
+                                                Content="Stop"
+                                                Style="{StaticResource GhostButtonStyle}"
+                                                Click="StopGameMonitorButton_Click" />
+                                    </Grid>
+                                    <Grid Margin="0,16,0,7">
+                                        <TextBlock Text="VISIBLE PROCESSES"
+                                                   Style="{StaticResource MetricLabelStyle}" />
+                                        <TextBlock x:Name="GameProcessCountText"
+                                                   Text="0"
+                                                   Foreground="#7E8BA5"
+                                                   FontSize="10"
+                                                   HorizontalAlignment="Right" />
+                                    </Grid>
+                                    <ListBox x:Name="GameProcessesList"
+                                             Style="{StaticResource DarkListBox}"
+                                             ItemTemplate="{StaticResource GameProcessTemplate}"
+                                             Height="128"
+                                             SelectionChanged="GameProcessesList_SelectionChanged"
+                                             ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                                    <TextBlock Text="Read-only FPS monitoring uses a DXGI hook. Anti-cheat protected games may block the attach; use only where permitted."
+                                               Foreground="#F2B66D"
+                                               FontSize="10"
+                                               Margin="0,9,0,0"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2">
+                            <Border Style="{StaticResource CardStyle}" Padding="0" MinHeight="460">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <Grid Margin="22,20,22,0">
+                                        <StackPanel>
+                                            <TextBlock Text="LIVE SENSORS"
+                                                       Foreground="#8EA0FF"
+                                                       FontSize="11"
+                                                       FontWeight="Bold" />
+                                            <TextBlock Text="CPU and GPU telemetry"
+                                                       Style="{StaticResource SectionTitleStyle}"
+                                                       Margin="0,5,0,0" />
+                                        </StackPanel>
+                                        <TextBlock x:Name="SensorCountText"
+                                                   Text="0 readings"
+                                                   Foreground="#7E8BA5"
+                                                   FontSize="11"
+                                                   HorizontalAlignment="Right"
+                                                   VerticalAlignment="Bottom" />
+                                    </Grid>
+                                    <Rectangle Grid.Row="1"
+                                               Height="1"
+                                               Fill="#202C45"
+                                               Margin="22,17,22,0" />
+                                    <ScrollViewer Grid.Row="2"
+                                                  Margin="22,16,8,20"
+                                                  VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl x:Name="SensorItems"
+                                                      ItemTemplate="{StaticResource SensorRowTemplate}" />
+                                    </ScrollViewer>
+                                </Grid>
+                            </Border>
+
+                            <Border Style="{StaticResource CardStyle}" Padding="22" Margin="0,16,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="SENSOR COVERAGE"
+                                               Foreground="#54D6C2"
+                                               FontSize="11"
+                                               FontWeight="Bold" />
+                                    <TextBlock x:Name="BackendText"
+                                               Text="Backend: starting…"
+                                               Foreground="#D7E0F2"
+                                               FontSize="13"
+                                               FontWeight="SemiBold"
+                                               Margin="0,12,0,0"
+                                               TextWrapping="Wrap" />
+                                    <TextBlock x:Name="CoverageText"
+                                               Text="Waiting for a sample…"
+                                               Style="{StaticResource MutedTextStyle}"
+                                               Margin="0,8,0,0"
+                                               TextWrapping="Wrap" />
+                                    <Border Background="#101A2C"
+                                            BorderBrush="#24314B"
+                                            BorderThickness="1"
+                                            CornerRadius="9"
+                                            Padding="11,9"
+                                            Margin="0,15,0,0">
+                                        <TextBlock x:Name="NoticeText"
+                                                   Text="Temperature access can require administrator privileges on some machines."
+                                                   Foreground="#8492AE"
+                                                   FontSize="11"
+                                                   TextWrapping="Wrap" />
+                                    </Border>
+                                    <Button x:Name="SetupButton"
+                                            Content="Set up CPU sensors"
+                                            Style="{StaticResource GhostButtonStyle}"
+                                            Click="SetupButton_Click"
+                                            Visibility="Collapsed"
+                                            HorizontalAlignment="Left"
+                                            Margin="0,12,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                        </StackPanel>
+                    </Grid>
+                </ScrollViewer>
+
+                <Border Grid.Row="2"
+                        Background="#0D1424"
+                        BorderBrush="#202B43"
+                        BorderThickness="0,1,0,0">
+                    <Grid Margin="26,0,18,0">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Ellipse x:Name="FooterDot"
+                                     Width="6"
+                                     Height="6"
+                                     Fill="#57D9A3"
+                                     Margin="0,0,8,0" />
+                            <TextBlock x:Name="StatusText"
+                                       Text="Starting monitor…"
+                                       Foreground="#9BA8C0"
+                                       FontSize="11" />
+                            <TextBlock x:Name="UpdatedText"
+                                       Text=""
+                                       Foreground="#5E6C87"
+                                       FontSize="11"
+                                       Margin="14,0,0,0" />
+                        </StackPanel>
+                        <TextBlock x:Name="AdminHintText"
+                                   Text="Tip: run as administrator for full sensor access"
+                                   Foreground="#5E6C87"
+                                   FontSize="11"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+                </Border>
+            </Grid>
+        </Border>
+    </Border>
+</Window>

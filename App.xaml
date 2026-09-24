@@ -1,0 +1,11 @@
+<Application x:Class="ThermalScope.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <SolidColorBrush x:Key="PageBrush" Color="#0A0F1D" />
+        <SolidColorBrush x:Key="CardBrush" Color="#11192B" />
+        <SolidColorBrush x:Key="MutedBrush" Color="#7E8BA5" />
+        <SolidColorBrush x:Key="TextBrush" Color="#EDF2FF" />
+    </Application.Resources>
+</Application>
