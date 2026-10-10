@@ -202,27 +202,33 @@ void LimitFrame(void* swapChain)
 std::atomic<uint32_t> g_refreshHz{ 0 };
 std::atomic<int64_t> g_refreshStamp{ 0 };
 
-// Refresh rate of the monitor the game window is on; re-read about once a second (it can change or move).
-void UpdateRefreshRate(IDXGISwapChain* swapChain, int64_t now)
+// True about once a second: the refresh rate and window of a game can change or move, so re-probe then.
+bool RefreshDue(int64_t now)
 {
     const int64_t stamp = g_refreshStamp.load(std::memory_order_relaxed);
     if (stamp != 0 && SecondsSince(stamp, now) < 1.0)
     {
-        return;
+        return false;
     }
 
     g_refreshStamp.store(now, std::memory_order_relaxed);
-    DXGI_SWAP_CHAIN_DESC description{};
-    if (FAILED(swapChain->GetDesc(&description)) || description.OutputWindow == nullptr)
+    return true;
+}
+
+// Refresh rate of the monitor the game window is on. Returns that monitor (null when unknown).
+HMONITOR UpdateRefreshRate(HWND window)
+{
+    if (window == nullptr)
     {
-        return;
+        return nullptr;
     }
 
+    HMONITOR handle = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
     MONITORINFOEXW monitor{};
     monitor.cbSize = sizeof(monitor);
-    if (!GetMonitorInfoW(MonitorFromWindow(description.OutputWindow, MONITOR_DEFAULTTONEAREST), &monitor))
+    if (!GetMonitorInfoW(handle, &monitor))
     {
-        return;
+        return nullptr;
     }
 
     DEVMODEW mode{};
@@ -235,16 +241,17 @@ void UpdateRefreshRate(IDXGISwapChain* swapChain, int64_t now)
             g_config->refreshHz = mode.dmDisplayFrequency;
         }
     }
+
+    return handle;
 }
 
-// Console-style pacing: when the target divides the refresh rate (60 on 60 Hz, 30 on 60 Hz, 72 on 144 Hz ...)
-// let the display's vertical blank set the pace instead of a timer. Every frame then stays on screen for exactly
-// the same number of refreshes, which a timer cannot guarantee (timer and display clocks always drift apart).
-bool LockToRefresh(void* swapChain, UINT& syncInterval, UINT& flags)
+// How many refreshes each frame should stay up so the target is a whole fraction of the display rate
+// (60 on 60 Hz, 30 on 60 Hz, 72 on 144 Hz ...); 0 when the mode does not apply.
+uint32_t LockDivisor(void* swapChain)
 {
     if (g_config == nullptr || !g_enabled.load(std::memory_order_acquire) || g_config->pacingMode != 1)
     {
-        return false;
+        return 0;
     }
 
     const uint32_t fps = g_config->targetFps;
@@ -252,11 +259,25 @@ bool LockToRefresh(void* swapChain, UINT& syncInterval, UINT& flags)
     void* active = g_activeSwapChain.load(std::memory_order_relaxed);
     if (fps < MinTargetFps || hz < 24 || hz > 1000 || (active != nullptr && active != swapChain))
     {
-        return false;
+        return 0;
     }
 
     const uint32_t divisor = (hz + fps / 2) / fps;
     if (divisor < 1 || divisor > 4 || std::fabs(static_cast<double>(hz) / divisor - fps) > 1.0)
+    {
+        return 0;
+    }
+
+    return divisor;
+}
+
+// Console-style pacing: let the display's vertical blank set the pace instead of a timer. Every frame then
+// stays on screen for exactly the same number of refreshes, which a timer cannot guarantee (timer and
+// display clocks always drift apart).
+bool LockToRefresh(void* swapChain, UINT& syncInterval, UINT& flags)
+{
+    const uint32_t divisor = LockDivisor(swapChain);
+    if (divisor == 0)
     {
         return false;
     }
@@ -382,7 +403,15 @@ void PaceFrame(IDXGISwapChain* swapChain, UINT& syncInterval, UINT& flags)
         return;
     }
 
-    UpdateRefreshRate(swapChain, NowTicks());
+    if (RefreshDue(NowTicks()))
+    {
+        DXGI_SWAP_CHAIN_DESC description{};
+        if (SUCCEEDED(swapChain->GetDesc(&description)))
+        {
+            UpdateRefreshRate(description.OutputWindow);
+        }
+    }
+
     if (LockToRefresh(swapChain, syncInterval, flags))
     {
         g_nextFrame.store(0, std::memory_order_relaxed); // the vblank paces; leave no stale timer deadline behind
@@ -421,34 +450,197 @@ D3D9PresentFunction g_d3d9ExDevicePresent = nullptr;   // same slot on a D3D9Ex 
 D3D9PresentExFunction g_d3d9PresentEx = nullptr;       // IDirect3DDevice9Ex::PresentEx
 D3D9SwapPresentFunction g_d3d9SwapPresent = nullptr;   // IDirect3DSwapChain9::Present
 
+// Locked mode for Direct3D 9. D3D9 fixes its vsync interval when the device is created, so unlike DXGI it
+// cannot be changed per Present. Instead wait for whole vertical blanks here: after the previous present
+// (which left at a vblank) hold the next one back until `divisor - own` more blanks have passed, where `own`
+// is the interval the game's own Present already waits for (0 = immediate, no vsync).
+std::atomic<int64_t> g_d3d9Returned{ 0 };   // QPC when the last Present of the active swap chain returned
+std::atomic<uint32_t> g_d3d9Interval{ 0 };  // refreshes the game's own Present waits: 0 = immediate, 1..4
+IDXGIOutput* g_vblankOutput = nullptr;      // output of the game's monitor, used only for WaitForVBlank
+HMONITOR g_vblankMonitor = nullptr;
+
+void SelectVBlankOutput(HMONITOR monitor)
+{
+    if (monitor == nullptr || (monitor == g_vblankMonitor && g_vblankOutput != nullptr))
+    {
+        return;
+    }
+
+    IDXGIOutput* found = nullptr;
+    IDXGIFactory1* factory = nullptr;
+    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+    {
+        IDXGIAdapter1* adapter = nullptr;
+        for (UINT a = 0; found == nullptr && factory->EnumAdapters1(a, &adapter) != DXGI_ERROR_NOT_FOUND; ++a)
+        {
+            IDXGIOutput* output = nullptr;
+            for (UINT o = 0; found == nullptr && adapter->EnumOutputs(o, &output) != DXGI_ERROR_NOT_FOUND; ++o)
+            {
+                DXGI_OUTPUT_DESC description{};
+                if (SUCCEEDED(output->GetDesc(&description)) && description.Monitor == monitor)
+                {
+                    found = output;
+                }
+                else
+                {
+                    output->Release();
+                }
+            }
+            adapter->Release();
+        }
+        factory->Release();
+    }
+
+    // Only the presenting thread gets here, so no other thread is inside WaitForVBlank on the old output.
+    if (g_vblankOutput != nullptr)
+    {
+        g_vblankOutput->Release();
+    }
+    g_vblankOutput = found;
+    g_vblankMonitor = monitor;
+}
+
+// Once a second: refresh rate, monitor and the game's own vsync interval.
+void ProbeD3D9(void* object, bool isDevice, HWND hint)
+{
+    IDirect3DSwapChain9* chain = nullptr;
+    bool release = false;
+    HWND window = nullptr;
+    if (isDevice)
+    {
+        auto* device = static_cast<IDirect3DDevice9*>(object);
+        release = SUCCEEDED(device->GetSwapChain(0, &chain)) && chain != nullptr;
+        D3DDEVICE_CREATION_PARAMETERS creation{};
+        if (SUCCEEDED(device->GetCreationParameters(&creation)))
+        {
+            window = creation.hFocusWindow;
+        }
+    }
+    else
+    {
+        chain = static_cast<IDirect3DSwapChain9*>(object);
+    }
+
+    D3DPRESENT_PARAMETERS parameters{};
+    if (chain != nullptr && SUCCEEDED(chain->GetPresentParameters(&parameters)))
+    {
+        // A windowed Present hands the frame to the desktop compositor and returns at once, vsync or not;
+        // only exclusive fullscreen actually blocks for the interval.
+        switch (parameters.Windowed ? D3DPRESENT_INTERVAL_IMMEDIATE : parameters.PresentationInterval)
+        {
+        case D3DPRESENT_INTERVAL_IMMEDIATE: g_d3d9Interval.store(0, std::memory_order_relaxed); break;
+        case D3DPRESENT_INTERVAL_TWO: g_d3d9Interval.store(2, std::memory_order_relaxed); break;
+        case D3DPRESENT_INTERVAL_THREE: g_d3d9Interval.store(3, std::memory_order_relaxed); break;
+        case D3DPRESENT_INTERVAL_FOUR: g_d3d9Interval.store(4, std::memory_order_relaxed); break;
+        default: g_d3d9Interval.store(1, std::memory_order_relaxed); break; // DEFAULT and ONE
+        }
+
+        if (parameters.hDeviceWindow != nullptr)
+        {
+            window = parameters.hDeviceWindow;
+        }
+    }
+
+    if (release)
+    {
+        chain->Release();
+    }
+
+    if (window == nullptr)
+    {
+        window = hint != nullptr ? hint : GetForegroundWindow();
+    }
+
+    SelectVBlankOutput(UpdateRefreshRate(window));
+}
+
+bool LockD3D9(void* object)
+{
+    const uint32_t divisor = LockDivisor(object);
+    const uint32_t own = g_d3d9Interval.load(std::memory_order_relaxed);
+    if (divisor == 0 || own > divisor || g_vblankOutput == nullptr)
+    {
+        return false;
+    }
+
+    const int64_t returned = g_d3d9Returned.load(std::memory_order_relaxed);
+    if (returned != 0) // the first frame has no phase to hold on to
+    {
+        // Blanks that went by while the game rendered; the 0.05 absorbs the few microseconds between the
+        // blank and the moment the last Present returned.
+        const double hz = static_cast<double>(g_refreshHz.load(std::memory_order_relaxed));
+        const uint32_t passed = static_cast<uint32_t>(SecondsSince(returned, NowTicks()) * hz + 0.05);
+        for (uint32_t i = passed; i < divisor - own; ++i)
+        {
+            if (FAILED(g_vblankOutput->WaitForVBlank()))
+            {
+                return false; // fall back to the timer limiter
+            }
+        }
+    }
+
+    return true;
+}
+
+void PaceD3D9(void* object, bool isDevice, HWND hint)
+{
+    if (RefreshDue(NowTicks()))
+    {
+        ProbeD3D9(object, isDevice, hint);
+    }
+
+    if (LockD3D9(object))
+    {
+        g_nextFrame.store(0, std::memory_order_relaxed); // the vblank paces; leave no stale timer deadline behind
+    }
+    else
+    {
+        LimitFrame(object);
+    }
+
+    RecordFrame(object);
+}
+
+void PresentedD3D9(void* object)
+{
+    if (g_activeSwapChain.load(std::memory_order_relaxed) == object)
+    {
+        g_d3d9Returned.store(NowTicks(), std::memory_order_relaxed);
+    }
+}
+
 // A device and its swap chain can both be hooked (and one may call the other): only the first
 // caller through becomes the active "swap chain", the nested call is ignored by both helpers.
 HRESULT WINAPI HookD3D9DevicePresent(void* device, const RECT* a, const RECT* b, HWND c, const RGNDATA* d)
 {
-    LimitFrame(device);
-    RecordFrame(device);
-    return g_d3d9DevicePresent(device, a, b, c, d);
+    PaceD3D9(device, true, c);
+    const HRESULT result = g_d3d9DevicePresent(device, a, b, c, d);
+    PresentedD3D9(device);
+    return result;
 }
 
 HRESULT WINAPI HookD3D9ExDevicePresent(void* device, const RECT* a, const RECT* b, HWND c, const RGNDATA* d)
 {
-    LimitFrame(device);
-    RecordFrame(device);
-    return g_d3d9ExDevicePresent(device, a, b, c, d);
+    PaceD3D9(device, true, c);
+    const HRESULT result = g_d3d9ExDevicePresent(device, a, b, c, d);
+    PresentedD3D9(device);
+    return result;
 }
 
 HRESULT WINAPI HookD3D9PresentEx(void* device, const RECT* a, const RECT* b, HWND c, const RGNDATA* d, DWORD flags)
 {
-    LimitFrame(device);
-    RecordFrame(device);
-    return g_d3d9PresentEx(device, a, b, c, d, flags);
+    PaceD3D9(device, true, c);
+    const HRESULT result = g_d3d9PresentEx(device, a, b, c, d, flags);
+    PresentedD3D9(device);
+    return result;
 }
 
 HRESULT WINAPI HookD3D9SwapPresent(void* swapChain, const RECT* a, const RECT* b, HWND c, const RGNDATA* d, DWORD flags)
 {
-    LimitFrame(swapChain);
-    RecordFrame(swapChain);
-    return g_d3d9SwapPresent(swapChain, a, b, c, d, flags);
+    PaceD3D9(swapChain, false, c);
+    const HRESULT result = g_d3d9SwapPresent(swapChain, a, b, c, d, flags);
+    PresentedD3D9(swapChain);
+    return result;
 }
 
 // Diagnostics for support: set THERMALSCOPE_HOOK_LOG to a file path before starting the game.

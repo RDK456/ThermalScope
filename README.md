@@ -71,7 +71,7 @@ The helper hooks `Present` (DXGI for DirectX 10/11/12, `IDirect3DDevice9::Presen
 
 **Pacing modes** (Frame pacer > Pacing): *Precise timer* spaces frames evenly at any target. *Locked to refresh* is the console-style option: when the target divides your refresh rate (60 or 30 on 60 Hz, 72 on 144 Hz ...) the display's vertical blank sets the pace, so every frame stays up for exactly the same number of refreshes. The *Jitter* readout shows how much frame times vary (lower is smoother).
 
-Supported: 32-bit and 64-bit DirectX 9/10/11/12 games (Locked-to-refresh needs DirectX 10/11/12). Not supported: Vulkan, OpenGL, DirectX 8, NVIDIA Reflex/DLSS frame-generation limiting. Games protected by Easy Anti-Cheat, BattlEye, Vanguard and similar are skipped on purpose; use the Xbox Game Bar counter there. Setup tips are in the app (fixed refresh: V-Sync on; G-Sync/FreeSync: limit a few FPS under the refresh rate).
+Supported: 32-bit and 64-bit DirectX 9/10/11/12 games (Locked-to-refresh works on all of them; on DirectX 9 the helper waits for whole vertical blanks itself). Not supported: Vulkan, OpenGL, DirectX 8, NVIDIA Reflex/DLSS frame-generation limiting. Games protected by Easy Anti-Cheat, BattlEye, Vanguard and similar are skipped on purpose; use the Xbox Game Bar counter there. Setup tips are in the app (fixed refresh: V-Sync on; G-Sync/FreeSync: limit a few FPS under the refresh rate).
 
 ### Overlay
 

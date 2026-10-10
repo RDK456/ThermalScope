@@ -19,6 +19,8 @@ public class HookIntegrationTests
     [Theory]
     [InlineData("testgame.exe")]
     [InlineData("testgame32.exe")]
+    [InlineData("testgame9_32.exe")]
+    [InlineData("testgame9v_32.exe")] // D3D9 with the game's own vsync on
     public void Locked_pacing_follows_the_display(string exe)
     {
         var folder = Environment.GetEnvironmentVariable("THERMALSCOPE_TESTGAMES");
