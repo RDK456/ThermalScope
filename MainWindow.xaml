@@ -623,6 +623,7 @@
 
                                 <TextBlock Text="Sensor refresh" Style="{StaticResource Caption}" Margin="0,16,0,6" />
                                 <StackPanel x:Name="IntervalChips" Orientation="Horizontal">
+                                    <RadioButton Content="0.5 s" Tag="0.5" GroupName="Interval" Style="{StaticResource ChipRadio}" Click="Interval_Click" Margin="0,0,6,0" />
                                     <RadioButton Content="1 s" Tag="1" GroupName="Interval" Style="{StaticResource ChipRadio}" Click="Interval_Click" Margin="0,0,6,0" />
                                     <RadioButton Content="2 s" Tag="2" GroupName="Interval" Style="{StaticResource ChipRadio}" Click="Interval_Click" Margin="0,0,6,0" />
                                     <RadioButton Content="5 s" Tag="5" GroupName="Interval" Style="{StaticResource ChipRadio}" Click="Interval_Click" Margin="0,0,6,0" />

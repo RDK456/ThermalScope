@@ -12,14 +12,14 @@ public sealed class HardwareMonitorService : IDisposable
     private readonly object _gate = new();
     private CancellationTokenSource? _cancellation;
     private Task? _worker;
-    private int _intervalSeconds = 2;
+    private double _intervalSeconds = 2;
     private int _refreshRequested;
     private bool _disposed;
 
     public event Action<MonitorSnapshot>? SnapshotReady;
     public event Action<string>? MonitorError;
 
-    public void Start(int intervalSeconds)
+    public void Start(double intervalSeconds)
     {
         lock (_gate)
         {
@@ -42,7 +42,7 @@ public sealed class HardwareMonitorService : IDisposable
         }
     }
 
-    public void SetInterval(int intervalSeconds)
+    public void SetInterval(double intervalSeconds)
     {
         lock (_gate)
         {
@@ -604,9 +604,9 @@ public sealed class HardwareMonitorService : IDisposable
 
     private static double ClampPercent(double value) => Math.Clamp(value, 0, 100);
 
-    private static int NormalizeInterval(int intervalSeconds) => Math.Clamp(intervalSeconds, 1, 30);
+    private static double NormalizeInterval(double intervalSeconds) => Math.Clamp(intervalSeconds, 0.5, 30);
 
-    private int GetIntervalSeconds()
+    private double GetIntervalSeconds()
     {
         lock (_gate)
         {

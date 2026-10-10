@@ -11,7 +11,7 @@ public sealed class AppSettings
         "ThermalScope",
         "settings.json");
 
-    public int IntervalSeconds { get; set; } = 2;
+    public double IntervalSeconds { get; set; } = 2;
     public bool UseFahrenheit { get; set; }
     public string Theme { get; set; } = "System";
     public bool CloseToTray { get; set; }

@@ -16,7 +16,7 @@ namespace ThermalScope;
 /// <summary>Main window: header, Monitor view and Frame pacer view.</summary>
 public partial class MainWindow : Window
 {
-    private static readonly int[] RefreshIntervals = { 1, 2, 5, 10 };
+    private static readonly double[] RefreshIntervals = { 0.5, 1, 2, 5, 10 };
 
     private readonly MainViewModel _vm = new();
     private readonly HardwareMonitorService _monitor = new();
@@ -108,7 +108,7 @@ public partial class MainWindow : Window
 
         SelectChip(ThemeChips, _settings.Theme);
         SelectChip(UnitChips, _settings.UseFahrenheit ? "F" : "C");
-        SelectChip(IntervalChips, (RefreshIntervals.Contains(_settings.IntervalSeconds) ? _settings.IntervalSeconds : 2).ToString());
+        SelectChip(IntervalChips, (RefreshIntervals.Contains(_settings.IntervalSeconds) ? _settings.IntervalSeconds : 2).ToString(System.Globalization.CultureInfo.InvariantCulture));
         SelectChip(LookChips, _settings.Style);
         SelectChip(AccentChips, _settings.Accent);
         SelectChip(GaugeChips, _settings.GaugeMode);
@@ -881,7 +881,7 @@ public partial class MainWindow : Window
 
     private void Interval_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { Tag: string tag } && int.TryParse(tag, out var seconds))
+        if (sender is FrameworkElement { Tag: string tag } && double.TryParse(tag, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds))
         {
             _monitor.SetInterval(seconds);
             _settings.IntervalSeconds = seconds;
