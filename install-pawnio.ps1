@@ -22,6 +22,14 @@ $installer = Join-Path $env:TEMP "PawnIO_setup-$version.exe"
 Write-Host "Downloading the official PawnIO $version installer..."
 Invoke-WebRequest -Uri $url -OutFile $installer
 
+# SHA-256 of PawnIO_setup.exe 2.2.0 as published in the GitHub release metadata (namazso/PawnIO.Setup).
+$expectedHash = '1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA3032'
+$actualHash = (Get-FileHash -Path $installer -Algorithm SHA256).Hash
+if ($actualHash -ne $expectedHash) {
+    Remove-Item $installer -Force -ErrorAction SilentlyContinue
+    throw "The downloaded PawnIO installer does not match the expected SHA-256 ($actualHash). Installation was cancelled."
+}
+
 $signature = Get-AuthenticodeSignature -FilePath $installer
 if ($signature.Status -ne 'Valid') {
     Remove-Item $installer -Force -ErrorAction SilentlyContinue

@@ -5,7 +5,7 @@ public sealed record MetricSnapshot(
     double? UsagePercent,
     double? TemperatureCelsius,
     string TemperatureLabel,
-    double? ClockGigahertz,
+    double? ClockMegahertz,
     double? PowerWatts);
 
 public sealed record SensorReading(
@@ -21,4 +21,5 @@ public sealed record MonitorSnapshot(
     MetricSnapshot Gpu,
     IReadOnlyList<SensorReading> Sensors,
     string Source,
-    string? Notice = null);
+    string? Notice = null,
+    bool CpuSensorsNeedDriver = false);

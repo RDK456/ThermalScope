@@ -1,9 +1,19 @@
-# Native DirectX FPS monitor helper
+# Native frame-pacer helper
 
-`ThermalScopeHook.dll` is the small x64 helper extracted and attached by the WPF app when the user enables FPS monitoring. It uses MinHook to observe the DXGI `Present` path and a small shared-memory configuration block for the target process. It does not alter the game's frame rate.
+`ThermalScopeHook.dll` is the small x64 helper that ThermalScope loads into a game you chose. It uses MinHook to hook DXGI `Present` / `Present1`, then:
 
-The helper is intentionally limited to user-selected, 64-bit DirectX 11/12 processes. It does not bypass anti-cheat or protected-process security. The app disables FPS reporting when the manager exits; the helper remains loaded until the target process exits so active frames cannot race an unload.
+- waits before each present so frames are evenly spaced (the frame limiter; target set live through shared memory),
+- publishes average FPS, slowest-frame FPS, frame time and a 240-frame ring buffer for the graph and overlay,
+- follows a single swap chain (overlay swap chains are ignored) and reports 0 when the game stops presenting.
 
-The checked-in DLL is built from `ThermalScopeHook.cpp` with MinHook 1.3.4. To rebuild it on another Windows x64 development machine, obtain the MinHook 1.3.4 source and an LLVM/MinGW x64 toolchain, then run `build-native.ps1` with `-Toolchain` and `-MinHookSource`. The helper hooks both DXGI `Present` and `Present1` and falls back from a temporary D3D11 swap chain to D3D12 when needed.
+It is limited to user-selected, 64-bit DirectX 10/11/12 processes, is never attached to Windows processes or anti-cheat protected games, and stops limiting if ThermalScope exits. It stays loaded until the game exits so in-flight frames cannot race an unload.
 
-Do not use this helper with anti-cheat protected games unless you have explicit permission to modify the process.
+The shared-memory layout (version 3) is documented at the top of `ThermalScopeHook.cpp` and mirrored in `Services/GameFpsMonitor.cs`.
+
+## Rebuild
+
+```powershell
+.\build-native.ps1
+```
+
+Needs Visual Studio Build Tools (C++ workload) and the Windows SDK. MinHook 1.3.4 is cloned into `native\minhook-1.3.4` (git-ignored). The DLL is linked with a static CRT so it loads in games without a redistributable. The checked-in DLL is embedded into the app at build time.

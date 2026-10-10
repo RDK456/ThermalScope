@@ -1,557 +1,988 @@
-using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Linq;
-using System.Security.Principal;
+using System.Diagnostics;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Shell;
 using ThermalScope.Models;
 using ThermalScope.Services;
+using ThermalScope.ViewModels;
 
 namespace ThermalScope;
 
+/// <summary>Main window: header, Monitor view and Frame pacer view.</summary>
 public partial class MainWindow : Window
 {
     private static readonly int[] RefreshIntervals = { 1, 2, 5, 10 };
-    private readonly HardwareMonitorService _monitor = new();
-    private readonly GameMonitorService _gameMonitor = new();
-    private readonly PawnIoSetupManager _pawnIoSetup = new();
-    private readonly ObservableCollection<SensorRow> _sensorRows = new();
-    private readonly ObservableCollection<GameProcessRow> _gameProcessRows = new();
-    private int _intervalIndex = 1;
-    private bool _gameSettingsInitialized;
-    private bool _suppressGameSelectionEvent;
-    private bool _isClosing;
 
-    public MainWindow()
+    private readonly MainViewModel _vm = new();
+    private readonly HardwareMonitorService _monitor = new();
+    private readonly GameMonitorService _game = new();
+    private readonly PawnIoSetupManager _pawnIo = new();
+    private readonly AppSettings _settings = AppSettings.Current;
+    private readonly HotkeyManager _hotkeys = new(AppSettings.Current.Hotkeys);
+    private readonly Dictionary<HotkeyAction, Button> _hotkeyButtons = new();
+    private HotkeyAction? _capturing;
+    private readonly TrayIcon _tray = new();
+    private bool _exiting;
+    private bool _closing;
+    private bool _installingDriver;
+    private OverlayWindow? _overlay;
+    private readonly UpdateService _updates = new();
+    private UpdateInfo? _pendingUpdate;
+    private bool _updating;
+
+    public MainWindow(bool startInTray)
     {
         InitializeComponent();
-        SensorItems.ItemsSource = _sensorRows;
-        GameProcessesList.ItemsSource = _gameProcessRows;
-        _monitor.SnapshotReady += OnSnapshotReady;
-        _monitor.MonitorError += OnMonitorError;
-        _gameMonitor.SnapshotReady += OnGameSnapshotReady;
-        _gameMonitor.MonitorError += OnGameMonitorError;
-        _monitor.Start(RefreshIntervals[_intervalIndex]);
-        _gameMonitor.Start();
-        UpdateElevationHint();
-        UpdateSetupButton();
+        DataContext = _vm;
+        RestoreSettings();
+
+        BuildHotkeyRows();
+        UpdateHotkeyText();
+        ApplyScale();
+        LookManager.ApplyBackdrop(this);
+        UpdateLookDescription();
+        SizeChanged += (_, _) => ApplyScale();
+        UpdateCapabilities();
+
+        _monitor.SnapshotReady += OnHardwareSnapshot;
+        _monitor.MonitorError += OnHardwareError;
+        _game.SnapshotReady += OnGameSnapshot;
+        _game.MonitorError += OnGameError;
+        ThemeManager.Changed += OnThemeChanged;
+        StateChanged += OnStateChanged;
+
+        _tray.ShowRequested += ShowFromTray;
+        _tray.ToggleLimiterRequested += () => _game.SetLimiterEnabled(!_game.LimiterEnabled);
+        _tray.StartupToggleRequested += () => SetStartup(!StartupManager.IsEnabled);
+        _tray.ExitRequested += ExitApp;
+        _tray.MenuOpening += () => UpdateTray();
+        UpdateTray();
+
+        _hotkeys.Pressed += OnHotkey;
+        var failed = _hotkeys.Register(this);
+        if (failed.Count > 0)
+        {
+            _vm.StatusText = $"Hotkeys already used by another app: {string.Join(", ", failed)}";
+        }
+
+        AutoUpdateSwitch.IsChecked = _settings.AutoCheckUpdates;
+        UpdateStatus.Text = $"Version {UpdateService.CurrentVersionText}. Not checked yet.";
+        _ = AutoCheckForUpdatesAsync();
+        _monitor.Start(RefreshIntervals.Contains(_settings.IntervalSeconds) ? _settings.IntervalSeconds : 2);
+        _game.Start();
     }
 
-    private async void Window_Loaded(object sender, RoutedEventArgs e)
+    /// <summary>Brings the window back from the tray (or from behind other windows).</summary>
+    public void ShowFromTray()
     {
-        UpdateSetupButton();
-        if (!_pawnIoSetup.ShouldPrompt)
+        if (_closing)
         {
             return;
         }
 
-        var answer = MessageBox.Show(
-            this,
-            "ThermalScope can read CPU package and per-core temperatures when the official PawnIO driver is installed. Windows will show an administrator prompt. Install it now?",
-            "One-time CPU sensor setup",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Information);
-
-        _pawnIoSetup.MarkPrompted();
-        if (answer == MessageBoxResult.Yes)
+        Show();
+        if (WindowState == WindowState.Minimized)
         {
-            await RunPawnIoSetupAsync();
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+    }
+
+    // ----- Settings ---------------------------------------------------------------------------
+
+    private void RestoreSettings()
+    {
+        _vm.UseFahrenheit = _settings.UseFahrenheit;
+        _vm.SensorFilter = MainViewModel.SensorFilters.Contains(_settings.SensorFilter) ? _settings.SensorFilter : "All";
+
+        FilterAll.IsChecked = _vm.SensorFilter == "All";
+        FilterCpu.IsChecked = _vm.SensorFilter == "CPU";
+        FilterGpu.IsChecked = _vm.SensorFilter == "GPU";
+        FilterTemps.IsChecked = _vm.SensorFilter == "Temps";
+
+        SelectChip(ThemeChips, _settings.Theme);
+        SelectChip(UnitChips, _settings.UseFahrenheit ? "F" : "C");
+        SelectChip(IntervalChips, (RefreshIntervals.Contains(_settings.IntervalSeconds) ? _settings.IntervalSeconds : 2).ToString());
+        SelectChip(LookChips, _settings.Style);
+        SelectChip(AccentChips, _settings.Accent);
+        SelectChip(GaugeChips, _settings.GaugeMode);
+        SelectChip(ScaleChips, _settings.UiScale);
+        SelectChip(OverlayScaleChips, _settings.OverlayScale);
+        StartupSwitch.IsChecked = StartupManager.IsEnabled;
+        StartupSwitch.IsEnabled = StartupManager.CanEnable;
+        TraySwitch.IsChecked = _settings.CloseToTray;
+        OverlaySwitch.IsChecked = _settings.OverlayEnabled;
+
+        PinButton.IsChecked = _settings.AlwaysOnTop;
+        Topmost = _settings.AlwaysOnTop;
+
+        if (_settings.WindowWidth is { } width && _settings.WindowHeight is { } height &&
+            _settings.WindowLeft is { } left && _settings.WindowTop is { } top &&
+            IsOnScreen(left, top, width, height))
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = left;
+            Top = top;
+            Width = Math.Max(width, MinWidth);
+            Height = Math.Max(height, MinHeight);
+        }
+
+        if (_settings.WindowMaximized)
+        {
+            WindowState = WindowState.Maximized;
         }
     }
 
-    private async void SetupButton_Click(object sender, RoutedEventArgs e)
+    private static bool IsOnScreen(double left, double top, double width, double height)
     {
-        await RunPawnIoSetupAsync();
+        var screen = new Rect(
+            SystemParameters.VirtualScreenLeft,
+            SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth,
+            SystemParameters.VirtualScreenHeight);
+        var window = new Rect(left, top, width, height);
+        window.Intersect(screen);
+        return !window.IsEmpty && window.Width > 200 && window.Height > 120;
     }
 
-    private async Task<bool> RunPawnIoSetupAsync()
+    private void SaveWindowBounds()
     {
-        if (_isClosing || !SetupButton.IsEnabled)
-        {
-            return false;
-        }
-
-        SetupButton.IsEnabled = false;
-        SetupButton.Content = "Setting up…";
-        var result = await _pawnIoSetup.InstallAsync();
-        if (_isClosing)
-        {
-            return false;
-        }
-
-        SetupButton.IsEnabled = true;
-        SetupButton.Content = "Set up CPU sensors";
-        if (!result.Success)
-        {
-            MessageBox.Show(
-                this,
-                result.Message,
-                "PawnIO setup failed",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return false;
-        }
-
-        if (_pawnIoSetup.TryRestart())
-        {
-            Close();
-            return true;
-        }
-
-        MessageBox.Show(
-            this,
-            "PawnIO setup completed. Restart ThermalScope to activate the CPU temperature sensors.",
-            "Setup complete",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
-        UpdateSetupButton();
-        return true;
+        var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+        _settings.WindowLeft = bounds.Left;
+        _settings.WindowTop = bounds.Top;
+        _settings.WindowWidth = bounds.Width;
+        _settings.WindowHeight = bounds.Height;
+        _settings.WindowMaximized = WindowState == WindowState.Maximized;
+        _settings.Save();
     }
 
-    private void UpdateSetupButton()
-    {
-        SetupButton.Visibility = _pawnIoSetup.IsInstalled ? Visibility.Collapsed : Visibility.Visible;
-    }
+    // ----- Snapshots --------------------------------------------------------------------------
 
-    private void OnSnapshotReady(MonitorSnapshot snapshot)
+    private void OnHardwareSnapshot(MonitorSnapshot snapshot)
     {
-        if (_isClosing)
+        if (_closing)
         {
             return;
         }
 
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!_isClosing)
-            {
-                Render(snapshot);
-            }
-        }));
-    }
-
-    private void OnMonitorError(string message)
-    {
-        if (_isClosing)
-        {
-            return;
-        }
-
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            if (_isClosing)
+            if (_closing)
             {
                 return;
             }
 
-            StatusText.Text = "Sensor backend issue";
-            StatusText.Foreground = BrushFromHex("#F2B66D");
-            HeaderStatusText.Text = "DEGRADED";
-            HeaderStatusText.Foreground = BrushFromHex("#F2B66D");
-            LiveDot.Fill = BrushFromHex("#F2B66D");
-            FooterDot.Fill = BrushFromHex("#F2B66D");
-            NoticeText.Text = message;
+            _vm.Apply(snapshot);
+            UpdateTray();
         }));
     }
 
-    private void OnGameSnapshotReady(GameMonitorSnapshot snapshot)
+    private void OnHardwareError(string message)
     {
-        if (_isClosing)
+        if (_closing)
         {
             return;
         }
 
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!_isClosing)
+            if (!_closing)
             {
-                RenderGame(snapshot);
+                _vm.ReportBackendIssue(message);
             }
         }));
     }
 
-    private void OnGameMonitorError(string message)
+    private void OnGameSnapshot(GameMonitorSnapshot snapshot)
     {
-        if (_isClosing)
+        if (_closing)
         {
             return;
         }
 
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!_isClosing)
+            if (_closing)
             {
-                GameStatusText.Text = $"Game monitor issue: {message}";
-                GameStatusText.Foreground = BrushFromHex("#F2B66D");
+                return;
             }
+
+            _vm.Pacer.Apply(snapshot);
+            UpdateOverlay(snapshot);
+            UpdateTray();
         }));
     }
 
-    private void RenderGame(GameMonitorSnapshot snapshot)
+    // The strip appears only while the paced game is the window you are looking at.
+    private void UpdateOverlay(GameMonitorSnapshot snapshot)
     {
-        FpsMonitorStatusText.Text = snapshot.FpsMonitorAvailable ? "DX11/DX12 READY" : "FPS MONITOR OFFLINE";
-        FpsMonitorStatusText.Foreground = BrushFromHex(snapshot.FpsMonitorAvailable ? "#71DDB5" : "#F2B66D");
-        FpsMonitorStatusText.ToolTip = snapshot.MonitorStatus;
-        GameStatusText.Text = snapshot.Status;
-        GameStatusText.Foreground = BrushFromHex(snapshot.Error is null ? "#D7E0F2" : "#F2B66D");
-        GameCurrentFpsText.Text = snapshot.SelectedProcess?.Fps is { } fps
-            ? $"{fps:0} FPS"
-            : "—";
-        GameCurrentFpsText.Foreground = BrushFromHex(snapshot.SelectedProcess?.Fps is null ? "#7E8BA5" : "#54D6C2");
-        GameMonitorProcessText.Text = snapshot.SelectedExecutable ?? "No game selected";
-        GameProcessCountText.Text = snapshot.VisibleProcesses.Count.ToString();
-
-        if (!_gameSettingsInitialized)
+        var show = _settings.OverlayEnabled && snapshot.MonitorReady &&
+                   snapshot.SelectedProcess is { } game && OverlayWindow.IsForeground(game.ProcessId);
+        if (show)
         {
-            AutoMonitorCheckBox.IsChecked = snapshot.AutoMonitor;
-            _gameSettingsInitialized = true;
+            _overlay ??= new OverlayWindow(_vm);
+            _overlay.ScaleSetting = _settings.OverlayScale;
+            _overlay.ShowFor(snapshot.SelectedProcess!.ProcessId);
+        }
+        else
+        {
+            _overlay?.HideOverlay();
+        }
+    }
+
+    // ----- Updates ------------------------------------------------------------------------------
+
+    private async Task AutoCheckForUpdatesAsync()
+    {
+        if (!_settings.AutoCheckUpdates ||
+            (_settings.LastUpdateCheck is { } last && DateTimeOffset.UtcNow - last < TimeSpan.FromHours(12)))
+        {
+            return;
         }
 
-        if (string.IsNullOrWhiteSpace(GameExecutableTextBox.Text) && !string.IsNullOrWhiteSpace(snapshot.SelectedExecutable))
+        await Task.Delay(TimeSpan.FromSeconds(8)); // let the app settle before touching the network
+        await CheckForUpdatesAsync(manual: false);
+    }
+
+    private async Task CheckForUpdatesAsync(bool manual)
+    {
+        if (_closing || _updating)
         {
-            GameExecutableTextBox.Text = snapshot.SelectedExecutable;
+            return;
         }
 
-        var previouslySelected = (GameProcessesList.SelectedItem as GameProcessRow)?.Name;
-        _suppressGameSelectionEvent = true;
+        CheckUpdatesButton.IsEnabled = false;
+        if (manual)
+        {
+            UpdateStatus.Text = "Checking...";
+        }
+
         try
         {
-            _gameProcessRows.Clear();
-            GameProcessRow? restoredSelection = null;
-            foreach (var process in snapshot.VisibleProcesses)
+            var update = await _updates.CheckAsync();
+            _settings.LastUpdateCheck = DateTimeOffset.UtcNow;
+            _settings.Save();
+            if (_closing)
             {
-                var row = new GameProcessRow
-                {
-                    Name = process.Name,
-                    Title = string.IsNullOrWhiteSpace(process.WindowTitle) ? "Running without a visible window" : process.WindowTitle,
-                    Detail = process.Fps is { } processFps
-                        ? $"{processFps:0} FPS · {Math.Max(0, process.WorkingSetBytes / 1024 / 1024)} MB"
-                        : $"{Math.Max(0, process.WorkingSetBytes / 1024 / 1024)} MB"
-                };
-                _gameProcessRows.Add(row);
-                if (string.Equals(row.Name, previouslySelected, StringComparison.OrdinalIgnoreCase))
-                {
-                    restoredSelection = row;
-                }
+                return;
             }
 
-            if (restoredSelection is not null)
+            _pendingUpdate = update;
+            UpdateChip.Visibility = update is null ? Visibility.Collapsed : Visibility.Visible;
+            InstallUpdateButton.Visibility = update is null ? Visibility.Collapsed : Visibility.Visible;
+            if (update is null)
             {
-                GameProcessesList.SelectedItem = restoredSelection;
+                UpdateStatus.Text = $"Version {UpdateService.CurrentVersionText} is the latest.";
+            }
+            else
+            {
+                UpdateChip.Content = $"Update {update.Version.ToString(3)}";
+                InstallUpdateButton.Content = update.IsDelta ? $"Install update ({update.SizeText}, changes only)" : $"Install update ({update.SizeText})";
+                UpdateStatus.Text = $"Version {update.Version.ToString(3)} is available (you have {UpdateService.CurrentVersionText}).";
+            }
+        }
+        catch (Exception exception)
+        {
+            if (manual && !_closing)
+            {
+                UpdateStatus.Text = $"Could not check for updates: {exception.Message}";
             }
         }
         finally
         {
-            _suppressGameSelectionEvent = false;
-        }
-
-        if (snapshot.SelectedExecutable is null)
-        {
-            GameMonitorStateText.Text = "No game selected";
-        }
-        else if (snapshot.MonitorAttached)
-        {
-            GameMonitorStateText.Text = "Standalone FPS monitor is attached.";
-        }
-        else if (!string.IsNullOrWhiteSpace(snapshot.Error))
-        {
-            GameMonitorStateText.Text = snapshot.Error;
-        }
-        else if (!snapshot.FpsMonitorAvailable)
-        {
-            GameMonitorStateText.Text = "Run as administrator and use a 64-bit DirectX 11/12 game.";
-        }
-        else
-        {
-            GameMonitorStateText.Text = "Select the game process to monitor its FPS.";
-        }
-    }
-
-    private void Render(MonitorSnapshot snapshot)
-    {
-        CpuNameText.Text = snapshot.Cpu.Name;
-        GpuNameText.Text = snapshot.Gpu.Name;
-
-        SetUsage(snapshot.Cpu.UsagePercent, CpuUsageText, CpuUsageBar);
-        SetUsage(snapshot.Gpu.UsagePercent, GpuUsageText, GpuUsageBar);
-        SetTemperature(snapshot.Cpu, CpuTempText, CpuTempStateText, CpuTempSourceText);
-        SetTemperature(snapshot.Gpu, GpuTempText, GpuTempStateText, GpuTempSourceText);
-
-        CpuClockText.Text = FormatGigahertz(snapshot.Cpu.ClockGigahertz);
-        CpuPowerText.Text = FormatWatts(snapshot.Cpu.PowerWatts);
-        GpuClockText.Text = FormatGigahertz(snapshot.Gpu.ClockGigahertz);
-        GpuPowerText.Text = FormatWatts(snapshot.Gpu.PowerWatts);
-
-        var cpuOnline = snapshot.Cpu.UsagePercent.HasValue || snapshot.Cpu.TemperatureCelsius.HasValue;
-        var gpuOnline = snapshot.Gpu.UsagePercent.HasValue || snapshot.Gpu.TemperatureCelsius.HasValue;
-        SetHealth(CpuHealthText, cpuOnline);
-        SetHealth(GpuHealthText, gpuOnline);
-
-        SummaryText.Text = $"CPU {FormatUsage(snapshot.Cpu.UsagePercent)}  ·  GPU {FormatUsage(snapshot.Gpu.UsagePercent)}";
-        SensorCountText.Text = $"{snapshot.Sensors.Count} sensor{(snapshot.Sensors.Count == 1 ? string.Empty : "s")} detected";
-        BackendText.Text = $"Backend: {snapshot.Source}";
-        CoverageText.Text = BuildCoverageText(snapshot);
-        NoticeText.Text = string.IsNullOrWhiteSpace(snapshot.Notice)
-            ? "All available CPU/GPU sensors are being sampled."
-            : snapshot.Notice;
-
-        _sensorRows.Clear();
-        foreach (var reading in snapshot.Sensors.Take(24))
-        {
-            _sensorRows.Add(new SensorRow
+            if (!_closing)
             {
-                Name = reading.Name,
-                Detail = $"{reading.Component} · {reading.Category}",
-                Value = FormatSensorValue(reading),
-                Unit = reading.Unit
-            });
+                CheckUpdatesButton.IsEnabled = true;
+            }
+        }
+    }
+
+    private async void CheckUpdates_Click(object sender, RoutedEventArgs e) => await CheckForUpdatesAsync(manual: true);
+
+    private void AutoUpdateSwitch_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.AutoCheckUpdates = AutoUpdateSwitch.IsChecked == true;
+        _settings.Save();
+    }
+
+    private void UpdateChip_Click(object sender, RoutedEventArgs e)
+    {
+        // Opens Settings > General where the details and the install button are.
+        TabGeneral.IsChecked = true;
+        SettingsTab_Click(TabGeneral, e);
+        SettingsPopup.IsOpen = true;
+    }
+
+    private async void InstallUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_pendingUpdate is not { } update || _updating)
+        {
+            return;
         }
 
-        var isLive = string.IsNullOrWhiteSpace(snapshot.Notice);
-        HeaderStatusText.Text = isLive ? "LIVE" : "DEGRADED";
-        HeaderStatusText.Foreground = BrushFromHex(isLive ? "#7EE5BB" : "#F2B66D");
-        LiveDot.Fill = BrushFromHex(isLive ? "#57D9A3" : "#F2B66D");
-        FooterDot.Fill = BrushFromHex(isLive ? "#57D9A3" : "#F2B66D");
-        StatusText.Text = isLive ? "Monitoring hardware" : "Monitoring with limited sensor access";
-        StatusText.Foreground = BrushFromHex(isLive ? "#9BA8C0" : "#F2B66D");
-        UpdatedText.Text = $"Updated {snapshot.Timestamp.ToLocalTime():HH:mm:ss}";
-    }
-
-    private static void SetUsage(double? value, TextBlock valueText, ProgressBar bar)
-    {
-        valueText.Text = FormatUsage(value);
-        bar.Value = value.HasValue ? Math.Clamp(value.Value, 0, 100) : 0;
-    }
-
-    private static void SetTemperature(
-        MetricSnapshot metric,
-        TextBlock valueText,
-        TextBlock stateText,
-        TextBlock sourceText)
-    {
-        valueText.Text = metric.TemperatureCelsius.HasValue
-            ? $"{metric.TemperatureCelsius.Value:0}°C"
-            : "—";
-        sourceText.Text = metric.TemperatureLabel;
-        stateText.Text = metric.TemperatureCelsius switch
+        if (!UpdateService.CanSelfUpdate)
         {
-            null => "N/A",
-            <= 70 => "NORMAL",
-            <= 85 => "WARM",
-            _ => "HOT"
-        };
-        stateText.Foreground = BrushFromHex(metric.TemperatureCelsius switch
-        {
-            null => "#7E8BA5",
-            <= 70 => "#71DDB5",
-            <= 85 => "#F2B66D",
-            _ => "#F38B9B"
-        });
-    }
-
-    private static void SetHealth(TextBlock healthText, bool isOnline)
-    {
-        healthText.Text = isOnline ? "ONLINE" : "WAITING";
-        healthText.Foreground = BrushFromHex(isOnline ? "#71DDB5" : "#7E8BA5");
-    }
-
-    private static string BuildCoverageText(MonitorSnapshot snapshot)
-    {
-        var temperatureSensors = snapshot.Sensors
-            .Where(reading => reading.Category == nameof(LibreHardwareMonitor.Hardware.SensorType.Temperature))
-            .ToList();
-        var loadSensors = snapshot.Sensors
-            .Where(reading => reading.Category == nameof(LibreHardwareMonitor.Hardware.SensorType.Load))
-            .ToList();
-        var cpuTemperatureSensors = temperatureSensors.Where(reading => reading.Component == "CPU").ToList();
-        var gpuTemperatureSensors = temperatureSensors.Where(reading => reading.Component == "GPU").ToList();
-        var cpuTemperatureAvailable = cpuTemperatureSensors.Count(reading => reading.Value.HasValue);
-        var gpuTemperatureAvailable = gpuTemperatureSensors.Count(reading => reading.Value.HasValue);
-        var loadAvailable = loadSensors.Count(reading => reading.Value.HasValue);
-        return $"CPU {cpuTemperatureAvailable}/{cpuTemperatureSensors.Count} temp · GPU {gpuTemperatureAvailable}/{gpuTemperatureSensors.Count} temp · {loadAvailable}/{loadSensors.Count} load sensors reporting";
-    }
-
-    private static string FormatUsage(double? value) => value.HasValue ? $"{value.Value:0}%" : "—";
-
-    private static string FormatGigahertz(double? value) => value.HasValue ? $"{value.Value:0.0} GHz" : "—";
-
-    private static string FormatWatts(double? value) => value.HasValue ? $"{value.Value:0.0} W" : "—";
-
-    private static string FormatSensorValue(SensorReading reading)
-    {
-        if (!reading.Value.HasValue)
-        {
-            return "—";
+            // Run from source or a read-only folder: hand over to the release page instead.
+            UpdateStatus.Text = "This copy cannot update itself (not installed with Setup). Opening the release page...";
+            try { Process.Start(new ProcessStartInfo(update.PageUrl) { UseShellExecute = true }); } catch { /* no browser */ }
+            return;
         }
 
-        return reading.Category == nameof(LibreHardwareMonitor.Hardware.SensorType.Clock)
-            ? $"{reading.Value.Value:0}"
-            : $"{reading.Value.Value:0.0}";
-    }
-
-    private static SolidColorBrush BrushFromHex(string hex) =>
-        new((Color)ColorConverter.ConvertFromString(hex));
-
-    private void UpdateElevationHint()
-    {
+        _updating = true;
+        InstallUpdateButton.IsEnabled = false;
         try
         {
-            using var identity = WindowsIdentity.GetCurrent();
-            var principal = new WindowsPrincipal(identity);
-            AdminHintText.Text = principal.IsInRole(WindowsBuiltInRole.Administrator)
-                ? "Elevated sensor access enabled"
-                : "Tip: run as administrator for full sensor access";
+            var progress = new Progress<double>(p => UpdateStatus.Text = $"Downloading {update.Version.ToString(3)}... {p:P0}");
+            var package = await _updates.DownloadAsync(update, progress);
+            UpdateStatus.Text = "Installing and restarting...";
+            if (UpdateService.StartApply(package))
+            {
+                ExitApp();
+                return;
+            }
+
+            UpdateStatus.Text = "Could not start the update step.";
         }
-        catch
+        catch (Exception exception)
         {
-            AdminHintText.Text = "Tip: run as administrator for full sensor access";
+            UpdateStatus.Text = $"Update failed: {exception.Message}";
+        }
+        finally
+        {
+            _updating = false;
+            if (!_closing)
+            {
+                InstallUpdateButton.IsEnabled = true;
+            }
         }
     }
 
-    private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private void OverlayScale_Click(object sender, RoutedEventArgs e)
     {
-        if (FindButtonAncestor(e.OriginalSource as DependencyObject) is not null)
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            _settings.OverlayScale = tag;
+            _settings.Save();
+            _game.RequestRefresh();
+        }
+    }
+
+    private void OverlaySwitch_Click(object sender, RoutedEventArgs e) => SetOverlayEnabled(OverlaySwitch.IsChecked == true);
+
+    private void SetOverlayEnabled(bool enabled)
+    {
+        _settings.OverlayEnabled = enabled;
+        _settings.Save();
+        OverlaySwitch.IsChecked = enabled;
+        if (!enabled)
+        {
+            _overlay?.HideOverlay();
+        }
+
+        _game.RequestRefresh();
+    }
+
+    private void OnGameError(string message)
+    {
+        // Surfaced in the pacer status line on the next snapshot; nothing else to do here.
+    }
+
+    private void OnThemeChanged() => Dispatcher.BeginInvoke(new Action(() =>
+    {
+        _vm.ReapplyTheme();
+        LookManager.ApplyBackdrop(this);
+    }));
+
+    private void UpdateCapabilities()
+    {
+        var elevated = AppRelauncher.IsElevated;
+        _vm.SetCapabilities(_pawnIo.IsInstalled, elevated);
+        ElevationText.Text = elevated ? "Running as administrator" : "Standard user";
+    }
+
+    private void UpdateTray()
+    {
+        var pacer = _vm.Pacer;
+        var text = pacer.IsLive && pacer.TargetFps > 0 && pacer.LimiterEnabled
+            ? $"Limiting {pacer.GameName} to {pacer.TargetFps} FPS"
+            : $"CPU {_vm.Cpu.TempValue}{_vm.Cpu.TempUnit}   GPU {_vm.Gpu.TempValue}{_vm.Gpu.TempUnit}";
+        _tray.Update(text, pacer.LimiterEnabled, StartupManager.IsEnabled, StartupManager.CanEnable);
+    }
+
+    // ----- Hotkeys ----------------------------------------------------------------------------
+
+    private void OnHotkey(HotkeyAction action)
+    {
+        switch (action)
+        {
+            case HotkeyAction.ToggleLimiter:
+                _game.SetLimiterEnabled(!_game.LimiterEnabled);
+                break;
+            case HotkeyAction.IncreaseLimit:
+                _game.NudgeLimit(+5);
+                break;
+            case HotkeyAction.DecreaseLimit:
+                _game.NudgeLimit(-5);
+                break;
+            case HotkeyAction.ShowWindow:
+                ShowFromTray();
+                break;
+            case HotkeyAction.ToggleOverlay:
+                SetOverlayEnabled(!_settings.OverlayEnabled);
+                break;
+        }
+    }
+
+    private void UpdateHotkeyText() =>
+        _vm.Pacer.HotkeyText = string.Join(
+            Environment.NewLine,
+            _hotkeys.Bindings.Select(b => $"{(b.IsAssigned ? b.Text : "Not set")}   {HotkeyManager.Describe(b.Action)}"));
+
+    // ----- Hotkey settings: click a shortcut, press the new keys ---------------------------------
+
+    private void BuildHotkeyRows()
+    {
+        HotkeyRows.Children.Clear();
+        _hotkeyButtons.Clear();
+        foreach (var binding in _hotkeys.Bindings)
+        {
+            var row = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var label = new TextBlock
+            {
+                Text = HotkeyManager.Describe(binding.Action),
+                VerticalAlignment = VerticalAlignment.Center,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 12, 0)
+            };
+            var button = new Button { Tag = binding.Action, MinWidth = 150, Style = (Style)FindResource("GhostButton") };
+            button.Click += HotkeyButton_Click;
+            button.PreviewKeyDown += HotkeyButton_PreviewKeyDown;
+            button.LostKeyboardFocus += (_, _) => EndCapture();
+            System.Windows.Automation.AutomationProperties.SetName(button, $"Shortcut: {HotkeyManager.Describe(binding.Action)}");
+            Grid.SetColumn(button, 1);
+            row.Children.Add(label);
+            row.Children.Add(button);
+            HotkeyRows.Children.Add(row);
+            _hotkeyButtons[binding.Action] = button;
+        }
+
+        RefreshHotkeyRows();
+    }
+
+    private void RefreshHotkeyRows()
+    {
+        foreach (var (action, button) in _hotkeyButtons)
+        {
+            var binding = _hotkeys.Get(action);
+            button.Content = _capturing == action ? "Press keys…" : binding.IsAssigned ? binding.Text : "Not set";
+        }
+    }
+
+    private void HotkeyButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: HotkeyAction action } && _capturing != action)
+        {
+            _capturing = action;
+            _hotkeys.Suspend(); // so the current shortcuts do not fire while the new one is typed
+            HotkeyStatus.Text = string.Empty;
+            RefreshHotkeyRows();
+        }
+    }
+
+    private void HotkeyButton_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_capturing is not { } action)
         {
             return;
         }
 
-        if (e.ClickCount == 2)
+        e.Handled = true;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt or Key.LeftShift or Key.RightShift
+            or Key.LWin or Key.RWin or Key.None)
         {
-            WindowState = WindowState == WindowState.Normal ? WindowState.Maximized : WindowState.Normal;
+            return; // a modifier on its own: wait for the main key
+        }
+
+        if (key == Key.Escape)
+        {
+            EndCapture();
+            return;
+        }
+
+        uint modifiers = 0;
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0) modifiers |= HotkeyBinding.Control;
+        if ((Keyboard.Modifiers & ModifierKeys.Alt) != 0) modifiers |= HotkeyBinding.Alt;
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) modifiers |= HotkeyBinding.Shift;
+
+        if (modifiers == 0 && key is Key.Back or Key.Delete)
+        {
+            CommitHotkey(HotkeyBinding.Unassigned(action));
+            return;
+        }
+
+        if (modifiers == 0)
+        {
+            HotkeyStatus.Text = "Add Ctrl, Alt or Shift so the shortcut does not steal normal typing.";
+            return;
+        }
+
+        CommitHotkey(new HotkeyBinding(action, modifiers, (uint)KeyInterop.VirtualKeyFromKey(key)));
+    }
+
+    private void CommitHotkey(HotkeyBinding binding)
+    {
+        if (!_hotkeys.Rebind(binding, out var error))
+        {
+            HotkeyStatus.Text = error; // stay in capture mode so another combination can be tried
+            return;
+        }
+
+        _settings.Hotkeys = _hotkeys.Export();
+        _settings.Save();
+        HotkeyStatus.Text = string.Empty;
+        UpdateHotkeyText();
+        EndCapture();
+    }
+
+    private void EndCapture()
+    {
+        if (_capturing is null)
+        {
+            return;
+        }
+
+        _capturing = null;
+        var failed = _hotkeys.Resume();
+        if (failed.Count > 0)
+        {
+            HotkeyStatus.Text = $"Already used by another app: {string.Join(", ", failed)}";
+        }
+
+        RefreshHotkeyRows();
+    }
+
+    private void HotkeyReset_Click(object sender, RoutedEventArgs e)
+    {
+        EndCapture();
+        var failed = _hotkeys.ResetToDefaults();
+        _settings.Hotkeys = _hotkeys.Export();
+        _settings.Save();
+        HotkeyStatus.Text = failed.Count > 0 ? $"Already used by another app: {string.Join(", ", failed)}" : string.Empty;
+        UpdateHotkeyText();
+        RefreshHotkeyRows();
+    }
+
+    private void SettingsPopup_Closed(object? sender, EventArgs e) => EndCapture();
+
+    // ----- Look, scale -----------------------------------------------------------------------------
+
+    private void SettingsTab_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            LookPanel.Visibility = tag == "Look" ? Visibility.Visible : Visibility.Collapsed;
+            GeneralPanel.Visibility = tag == "General" ? Visibility.Visible : Visibility.Collapsed;
+            HotkeysPanel.Visibility = tag == "Hotkeys" ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    private void Look_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            _settings.Style = tag;
+            _settings.Save();
+            ApplyLook();
+        }
+    }
+
+    private void Accent_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            _settings.Accent = tag;
+            _settings.Save();
+            ApplyLook();
+        }
+    }
+
+    private void Gauge_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            _settings.GaugeMode = tag;
+            _settings.Save();
+            ApplyLook();
+        }
+    }
+
+    private void Scale_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            _settings.UiScale = tag;
+            _settings.Save();
+            ApplyScale();
+        }
+    }
+
+    private void ApplyLook()
+    {
+        LookManager.Apply(_settings.Style, _settings.Accent, _settings.GaugeMode);
+        LookManager.ApplyBackdrop(this);
+        UpdateLookDescription();
+    }
+
+    private void UpdateLookDescription() => LookDescription.Text = _settings.Style switch
+    {
+        "Scope" => "Viewfinder corner marks, a fine dot grid and sharp edges. The thermal-camera look.",
+        "Glass" => "Frosted translucent panels over a blurred backdrop (Windows 11).",
+        "Depth" => "Raised panels with soft shadows and a lit top edge.",
+        _ => "Quiet, borderless panels with nothing extra."
+    };
+
+    private static void SelectChip(Panel panel, string tag)
+    {
+        foreach (var chip in panel.Children.OfType<RadioButton>())
+        {
+            chip.IsChecked = (string?)chip.Tag == tag;
+        }
+    }
+
+    // Auto follows the window (so the layout stays proportional on small windows and 4K alike); the fixed
+    // sizes pin it. The layout transform shrinks the available size accordingly, so cards still reflow.
+    private void ApplyScale()
+    {
+        double scale;
+        if (_settings.UiScale.EndsWith('%') &&
+            double.TryParse(_settings.UiScale.TrimEnd('%'), NumberStyles.Float, CultureInfo.InvariantCulture, out var percent))
+        {
+            scale = percent / 100.0;
         }
         else
         {
-            DragMove();
-        }
-    }
-
-    private static Button? FindButtonAncestor(DependencyObject? element)
-    {
-        while (element is not null)
-        {
-            if (element is Button button)
-            {
-                return button;
-            }
-
-            try
-            {
-                element = VisualTreeHelper.GetParent(element);
-            }
-            catch (InvalidOperationException)
-            {
-                element = LogicalTreeHelper.GetParent(element);
-            }
+            scale = Math.Clamp(Math.Min(ActualWidth / 1180.0, ActualHeight / 760.0), 0.9, 2.0);
         }
 
-        return null;
-    }
-
-    private void MonitorGameButton_Click(object sender, RoutedEventArgs e)
-    {
-        var executable = GameExecutableTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(executable))
-        {
-            MessageBox.Show(
-                this,
-                "Enter the game executable name, for example Game.exe.",
-                "Select a game",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-            return;
-        }
-
-        var autoMonitor = AutoMonitorCheckBox.IsChecked == true;
-        _gameMonitor.Configure(executable, autoMonitor);
-        GameStatusText.Text = $"Watching {executable} for FPS…";
-        GameStatusText.Foreground = BrushFromHex("#D7E0F2");
-    }
-
-    private void StopGameMonitorButton_Click(object sender, RoutedEventArgs e)
-    {
-        _gameMonitor.Clear();
-        GameExecutableTextBox.Clear();
-        AutoMonitorCheckBox.IsChecked = false;
-        GameStatusText.Text = "Game FPS monitor stopped.";
-        GameStatusText.Foreground = BrushFromHex("#D7E0F2");
-        GameMonitorStateText.Text = "No game selected";
-    }
-
-    private void GameProcessesList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressGameSelectionEvent)
+        scale = Math.Round(scale, 2);
+        if (Root.LayoutTransform is ScaleTransform current && Math.Abs(current.ScaleX - scale) < 0.005)
         {
             return;
         }
 
-        if (GameProcessesList.SelectedItem is GameProcessRow row)
+        Root.LayoutTransform = new ScaleTransform(scale, scale);
+        MinWidth = 900 * Math.Max(scale, 0.9);
+        MinHeight = 600 * Math.Max(scale, 0.9);
+        if (WindowChrome.GetWindowChrome(this) is { } chrome)
         {
-            GameExecutableTextBox.Text = row.Name;
-            GameStatusText.Text = $"{row.Name} selected. Click Monitor FPS to attach.";
-            GameStatusText.Foreground = BrushFromHex("#D7E0F2");
+            chrome.CaptionHeight = 52 * scale;
         }
     }
 
-    private void IntervalButton_Click(object sender, RoutedEventArgs e)
+    // ----- Frame limit controls ---------------------------------------------------------------
+
+    private void ApplyLimit(int fps)
     {
-        _intervalIndex = (_intervalIndex + 1) % RefreshIntervals.Length;
-        var seconds = RefreshIntervals[_intervalIndex];
-        _monitor.SetInterval(seconds);
-        IntervalButton.Content = $"{seconds} sec";
-        StatusText.Text = $"Refresh interval set to {seconds} seconds";
-        StatusText.Foreground = BrushFromHex("#9BA8C0");
+        _game.SetLimit(fps);
+        _vm.Pacer.TargetInput = fps > 0 ? fps.ToString(CultureInfo.InvariantCulture) : string.Empty;
     }
 
-    private void RefreshButton_Click(object sender, RoutedEventArgs e)
+    private int ParseTarget()
     {
-        _monitor.RequestRefresh();
-        StatusText.Text = "Refresh queued";
-        StatusText.Foreground = BrushFromHex("#9BA8C0");
+        var text = _vm.Pacer.TargetInput.Trim();
+        return int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var value) ? value : 0;
     }
 
-    private void MinimizeButton_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
-
-    private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
-
-    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    private void Apply_Click(object sender, RoutedEventArgs e)
     {
-        if (e.Key == Key.Escape)
+        var value = ParseTarget();
+        ApplyLimit(value <= 0 ? 0 : Math.Clamp(value, GameMonitorService.MinFps, GameMonitorService.MaxFps));
+        Keyboard.ClearFocus();
+    }
+
+    private void Preset_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag } && int.TryParse(tag, out var fps))
         {
-            Close();
+            ApplyLimit(fps);
         }
-        else if (e.Key == Key.F5)
+    }
+
+    private void StepUp_Click(object sender, RoutedEventArgs e) => Step(+5);
+
+    private void StepDown_Click(object sender, RoutedEventArgs e) => Step(-5);
+
+    private void Step(int delta)
+    {
+        var current = ParseTarget();
+        if (current <= 0)
         {
-            _monitor.RequestRefresh();
-            _gameMonitor.RequestRefresh();
+            current = _vm.Pacer.TargetFps > 0 ? _vm.Pacer.TargetFps : 60;
+        }
+
+        ApplyLimit(Math.Clamp(current + delta, GameMonitorService.MinFps, GameMonitorService.MaxFps));
+    }
+
+    private void TargetBox_PreviewTextInput(object sender, TextCompositionEventArgs e) =>
+        e.Handled = !e.Text.All(char.IsAsciiDigit);
+
+    private void TargetBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            Apply_Click(sender, e);
             e.Handled = true;
         }
     }
 
+    private void TargetBox_GotFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        _vm.Pacer.SetEditing(true);
+        TargetBox.SelectAll();
+    }
+
+    private void TargetBox_LostFocus(object sender, KeyboardFocusChangedEventArgs e) => _vm.Pacer.SetEditing(false);
+
+    private void LimiterSwitch_Click(object sender, RoutedEventArgs e) =>
+        _game.SetLimiterEnabled(LimiterSwitch.IsChecked == true);
+
+    private void AutoDetect_Click(object sender, RoutedEventArgs e) => _game.UseAutoDetect();
+
+    private void GameList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (GameList.SelectedItem is ProcessRowViewModel row)
+        {
+            _game.Configure(row.Name, autoMonitor: true);
+            GameList.SelectedItem = null;
+            PickGameButton.IsChecked = false;
+        }
+    }
+
+    private void Consent_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.FpsConsentAccepted = true;
+        _settings.Save();
+        _game.RequestRefresh();
+    }
+
+    // ----- Monitor view -----------------------------------------------------------------------
+
+    private void SensorFilter_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            _vm.SensorFilter = tag;
+            _settings.SensorFilter = tag;
+            _settings.Save();
+        }
+    }
+
+    private async void InstallDriver_Click(object sender, RoutedEventArgs e)
+    {
+        if (_installingDriver)
+        {
+            return;
+        }
+
+        _installingDriver = true;
+        _vm.StatusText = "Installing the PawnIO driver… approve the Windows prompt.";
+        var result = await _pawnIo.InstallAsync();
+        _installingDriver = false;
+        if (_closing)
+        {
+            return;
+        }
+
+        UpdateCapabilities();
+        if (!result.Success)
+        {
+            MessageBox.Show(this, result.Message, "PawnIO setup", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (AppRelauncher.TryRelaunch(elevated: true))
+        {
+            ExitApp();
+        }
+        else
+        {
+            _vm.StatusText = "PawnIO is installed. Restart ThermalScope as administrator to read the CPU temperature.";
+        }
+    }
+
+    private void RestartAdmin_Click(object sender, RoutedEventArgs e)
+    {
+        if (AppRelauncher.TryRelaunch(elevated: true))
+        {
+            ExitApp();
+        }
+        else
+        {
+            _vm.StatusText = "Administrator access was cancelled.";
+        }
+    }
+
+    // ----- Header and settings popup ----------------------------------------------------------
+
+    private void NavMonitor_Checked(object sender, RoutedEventArgs e) => _vm.ActiveView = "Monitor";
+
+    private void NavPacer_Checked(object sender, RoutedEventArgs e) => _vm.ActiveView = "Pacer";
+
+    private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshAll();
+
+    private void RefreshAll()
+    {
+        _monitor.RequestRefresh();
+        _game.RequestRefresh();
+    }
+
+    private void Pin_Click(object sender, RoutedEventArgs e)
+    {
+        Topmost = PinButton.IsChecked == true;
+        _settings.AlwaysOnTop = Topmost;
+        _settings.Save();
+    }
+
+    private void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        StartupSwitch.IsChecked = StartupManager.IsEnabled;
+        SettingsPopup.IsOpen = !SettingsPopup.IsOpen;
+    }
+
+    private void Theme_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            _settings.Theme = tag;
+            _settings.Save();
+            ThemeManager.Apply(tag);
+            LookManager.ApplyBackdrop(this);
+        }
+    }
+
+    private void Unit_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            _vm.UseFahrenheit = tag == "F";
+            _settings.UseFahrenheit = _vm.UseFahrenheit;
+            _settings.Save();
+        }
+    }
+
+    private void Interval_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag } && int.TryParse(tag, out var seconds))
+        {
+            _monitor.SetInterval(seconds);
+            _settings.IntervalSeconds = seconds;
+            _settings.Save();
+        }
+    }
+
+    private void StartupSwitch_Click(object sender, RoutedEventArgs e) =>
+        SetStartup(StartupSwitch.IsChecked == true);
+
+    private void SetStartup(bool enabled)
+    {
+        var ok = StartupManager.SetEnabled(enabled);
+        StartupSwitch.IsChecked = StartupManager.IsEnabled;
+        if (!ok)
+        {
+            _vm.StatusText = "Could not change the startup entry (run the published ThermalScope.exe, not dotnet run).";
+        }
+
+        UpdateTray();
+    }
+
+    private void TraySwitch_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.CloseToTray = TraySwitch.IsChecked == true;
+        _settings.Save();
+    }
+
+    // ----- Window chrome ----------------------------------------------------------------------
+
+    private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void Maximize_Click(object sender, RoutedEventArgs e) =>
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void OnStateChanged(object? sender, EventArgs e)
+    {
+        var maximized = WindowState == WindowState.Maximized;
+        // A maximised chrome-less window overhangs the screen by its resize border.
+        Root.Margin = maximized ? new Thickness(8) : new Thickness(0);
+        MaximizeGlyph.Text = maximized ? "" : "";
+        MaximizeButton.ToolTip = maximized ? "Restore" : "Maximize";
+    }
+
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.System && e.SystemKey == Key.F4)
+        {
+            Close(); // the Glass look drops WS_SYSMENU, which also drops the built-in Alt+F4
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.F5)
+        {
+            RefreshAll();
+            e.Handled = true;
+        }
+        else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key is Key.D1 or Key.D2)
+        {
+            _vm.ActiveView = e.Key == Key.D1 ? "Monitor" : "Pacer";
+            e.Handled = true;
+        }
+    }
+
+    private void ExitApp()
+    {
+        _exiting = true;
+        Close();
+    }
+
     protected override void OnClosing(CancelEventArgs e)
     {
-        _isClosing = true;
-        _monitor.SnapshotReady -= OnSnapshotReady;
-        _monitor.MonitorError -= OnMonitorError;
-        _gameMonitor.SnapshotReady -= OnGameSnapshotReady;
-        _gameMonitor.MonitorError -= OnGameMonitorError;
-        _monitor.Dispose();
-        _gameMonitor.Dispose();
+        if (_settings.CloseToTray && !_exiting && !_closing)
+        {
+            e.Cancel = true;
+            SaveWindowBounds();
+            Hide();
+            return;
+        }
+
         base.OnClosing(e);
     }
-}
 
-public sealed class SensorRow
-{
-    public string Name { get; init; } = string.Empty;
-    public string Detail { get; init; } = string.Empty;
-    public string Value { get; init; } = "—";
-    public string Unit { get; init; } = string.Empty;
-}
-
-public sealed class GameProcessRow
-{
-    public string Name { get; init; } = string.Empty;
-    public string Title { get; init; } = string.Empty;
-    public string Detail { get; init; } = string.Empty;
+    protected override void OnClosed(EventArgs e)
+    {
+        _closing = true;
+        SaveWindowBounds();
+        ThemeManager.Changed -= OnThemeChanged;
+        _monitor.SnapshotReady -= OnHardwareSnapshot;
+        _monitor.MonitorError -= OnHardwareError;
+        _game.SnapshotReady -= OnGameSnapshot;
+        _game.MonitorError -= OnGameError;
+        _hotkeys.Dispose();
+        _overlay?.Close();
+        _tray.Dispose();
+        _monitor.Dispose();
+        _game.Dispose(); // also lifts the frame limit inside the game
+        base.OnClosed(e);
+        Application.Current.Shutdown();
+    }
 }

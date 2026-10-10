@@ -1,47 +1,59 @@
-using System.IO;
-using System.IO.MemoryMappedFiles;
-using System.Reflection;
+using ThermalScope.Models;
 
 namespace ThermalScope.Services;
 
+/// <summary>
+/// Controller side of the in-game helper: injects ThermalScopeHook.dll into the chosen process and
+/// talks to it through a shared-memory block (see native/ThermalScopeHook.cpp for the layout).
+/// </summary>
 public sealed class GameFpsMonitor : IDisposable
 {
-    private const string HookResourceName = "ThermalScope.ThermalScopeHook.dll";
     private const string MappingName = @"Local\ThermalScopeFpsConfig";
-    private const int ConfigSize = 32;
+    private const int ConfigSize = 1024;
     private const int ConfigMagic = 0x54494D31;
-    private const int ConfigVersion = 1;
-    private readonly string _hookPath;
-    private MemoryMappedFile? _mapping;
-    private MemoryMappedViewAccessor? _view;
+    private const int ConfigVersion = 3;
+    private const int FrameRingSize = 240;
+
+    private const int OffsetController = 8;
+    private const int OffsetTarget = 12;
+    private const int OffsetEnabled = 20;
+    private const int OffsetHookReady = 24;
+    private const int OffsetAverage = 28;
+    private const int OffsetLow = 32;
+    private const int OffsetFrameTime = 36;
+    private const int OffsetLimit = 44;
+    private const int OffsetFrameCount = 48;
+    private const int OffsetFrames = 64;
+
+    private readonly HookFileStore.HookFile? _hook;
+    private SecureSharedMemory? _memory;
     private int _attachedProcessId;
+    private int _targetFps;
 
     public GameFpsMonitor()
     {
         try
         {
-            _hookPath = PrepareHookPath();
-            IsAvailable = File.Exists(_hookPath);
-            Status = IsAvailable
-                ? "Standalone DirectX FPS monitor ready."
-                : "The standalone FPS monitor DLL could not be prepared.";
+            _hook = HookFileStore.Prepare();
+            IsAvailable = true;
+            Status = "Frame pacer ready.";
         }
         catch (Exception exception)
         {
-            _hookPath = Path.Combine(AppContext.BaseDirectory, "ThermalScopeHook.dll");
             IsAvailable = false;
-            Status = $"The standalone FPS monitor could not be prepared: {exception.Message}";
+            Status = $"The frame pacer could not be prepared: {exception.Message}";
         }
     }
 
     public bool IsAvailable { get; private set; }
-    public string Status { get; private set; }
-    public string HookPath => _hookPath;
+    public string Status { get; private set; } = string.Empty;
+    public int TargetFps => _targetFps;
 
+    /// <summary>Injects the helper (once per process). Returns before the helper has hooked a swap chain.</summary>
     public bool TryAttach(int processId, out string error)
     {
         error = string.Empty;
-        if (!IsAvailable)
+        if (!IsAvailable || _hook is null)
         {
             error = Status;
             return false;
@@ -53,13 +65,21 @@ public sealed class GameFpsMonitor : IDisposable
             return false;
         }
 
+        var blocker = AntiCheatGuard.FindBlocker(processId);
+        if (blocker is not null)
+        {
+            error = blocker;
+            return false;
+        }
+
         try
         {
-            EnsureMapping();
+            EnsureMemory();
             WriteConfig(processId, true);
             if (_attachedProcessId != processId)
             {
-                if (!NativeProcessInjector.Inject(processId, _hookPath, out error))
+                using var locked = HookFileStore.OpenVerified(_hook);
+                if (!NativeProcessInjector.Inject(processId, _hook.Path, out error))
                 {
                     Disable();
                     return false;
@@ -68,36 +88,32 @@ public sealed class GameFpsMonitor : IDisposable
                 _attachedProcessId = processId;
             }
 
-            for (var attempt = 0; attempt < 30; attempt++)
-            {
-                if (_view!.ReadInt32(24) == 1)
-                {
-                    Status = "Standalone DirectX FPS monitor attached.";
-                    return true;
-                }
-
-                Thread.Sleep(100);
-            }
-
-            WriteConfig(processId, false);
-            error = "The FPS monitor loaded, but no DirectX 11/12 swap chain was found yet. It will keep trying in the background.";
-            Status = error;
-            return false;
+            return true;
         }
         catch (Exception exception)
         {
             Disable();
-            error = $"The FPS monitor could not start: {exception.Message}";
+            error = $"The frame pacer could not start: {exception.Message}";
             Status = error;
             return false;
         }
+    }
+
+    /// <summary>True once the helper has hooked a DirectX swap chain inside the game.</summary>
+    public bool IsHookReady => _memory is not null && _memory.ReadInt32(OffsetHookReady) == 1;
+
+    /// <summary>Sets the frame limit (0 = unlimited). Takes effect on the next frame, even mid-game.</summary>
+    public void SetTargetFps(int fps)
+    {
+        _targetFps = Math.Clamp(fps, 0, 1000);
+        _memory?.WriteInt32(OffsetLimit, _targetFps);
     }
 
     public bool Disable()
     {
         try
         {
-            if (_view is not null)
+            if (_memory is not null)
             {
                 WriteConfig(0, false);
             }
@@ -111,83 +127,73 @@ public sealed class GameFpsMonitor : IDisposable
         }
     }
 
-    public double? ReadFps(int processId)
+    public FpsSample? ReadFps(int processId)
     {
-        if (_view is null || processId <= 0 || _view.ReadInt32(12) != processId || _view.ReadInt32(20) == 0)
+        if (_memory is null || processId <= 0 ||
+            _memory.ReadInt32(OffsetTarget) != processId || _memory.ReadInt32(OffsetEnabled) == 0)
         {
             return null;
         }
 
-        var bits = _view.ReadInt32(28);
-        var fps = BitConverter.Int32BitsToSingle(bits);
-        return double.IsFinite(fps) && fps > 0 && fps <= 1000 ? fps : null;
+        var average = _memory.ReadSingle(OffsetAverage);
+        var low = _memory.ReadSingle(OffsetLow);
+        var frameTime = _memory.ReadSingle(OffsetFrameTime);
+        if (!float.IsFinite(average) || average <= 0 || average > 20000)
+        {
+            return null;
+        }
+
+        return new FpsSample(average, float.IsFinite(low) ? low : 0, float.IsFinite(frameTime) ? frameTime : 0);
+    }
+
+    /// <summary>The most recent frame intervals in milliseconds, oldest first.</summary>
+    public float[] ReadFrameTimes(int processId, int count)
+    {
+        if (_memory is null || processId <= 0 || _memory.ReadInt32(OffsetTarget) != processId)
+        {
+            return Array.Empty<float>();
+        }
+
+        var total = (uint)_memory.ReadInt32(OffsetFrameCount);
+        var available = (int)Math.Min(total, FrameRingSize);
+        var n = Math.Min(Math.Max(count, 0), available);
+        var result = new float[n];
+        var start = total - (uint)n;
+        for (var i = 0; i < n; i++)
+        {
+            var value = _memory.ReadSingle(OffsetFrames + (int)((start + (uint)i) % FrameRingSize) * 4);
+            result[i] = float.IsFinite(value) && value >= 0 && value < 1000 ? value : 0;
+        }
+
+        return result;
     }
 
     public void Dispose()
     {
+        SetTargetFps(0);
         Disable();
-        _view?.Dispose();
-        _view = null;
-        _mapping?.Dispose();
-        _mapping = null;
+        _memory?.Dispose();
+        _memory = null;
         IsAvailable = false;
     }
 
-    private void EnsureMapping()
+    private void EnsureMemory()
     {
-        if (_view is not null)
-        {
-            return;
-        }
-
-        _mapping = MemoryMappedFile.CreateOrOpen(MappingName, 4096, MemoryMappedFileAccess.ReadWrite);
-        _view = _mapping.CreateViewAccessor(0, ConfigSize, MemoryMappedFileAccess.ReadWrite);
+        _memory ??= SecureSharedMemory.Create(MappingName, ConfigSize);
     }
 
     private void WriteConfig(int targetProcessId, bool enabled)
     {
-        var view = _view ?? throw new InvalidOperationException("The FPS monitor mapping is not open.");
-        view.Write(0, ConfigMagic);
-        view.Write(4, ConfigVersion);
-        view.Write(8, Environment.ProcessId);
-        view.Write(12, targetProcessId);
-        view.Write(16, 0);
-        view.Write(20, enabled ? 1 : 0);
-        view.Write(24, 0);
-        view.Write(28, 0);
-        view.Flush();
-    }
-
-    private static string PrepareHookPath()
-    {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(localAppData))
-        {
-            localAppData = AppContext.BaseDirectory;
-        }
-
-        var directory = Path.Combine(localAppData, "ThermalScope");
-        Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, "ThermalScopeHook.dll");
-        if (File.Exists(path))
-        {
-            return path;
-        }
-
-        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream(HookResourceName);
-        if (resource is not null)
-        {
-            using var output = File.Create(path);
-            resource.CopyTo(output);
-            return path;
-        }
-
-        var bundledPath = Path.Combine(AppContext.BaseDirectory, "ThermalScopeHook.dll");
-        if (File.Exists(bundledPath))
-        {
-            File.Copy(bundledPath, path, true);
-        }
-
-        return path;
+        var memory = _memory ?? throw new InvalidOperationException("The shared memory is not open.");
+        memory.WriteInt32(0, ConfigMagic);
+        memory.WriteInt32(4, ConfigVersion);
+        memory.WriteInt32(OffsetController, Environment.ProcessId);
+        memory.WriteInt32(OffsetTarget, targetProcessId);
+        memory.WriteInt32(16, 0);
+        memory.WriteInt32(OffsetEnabled, enabled ? 1 : 0);
+        memory.WriteInt32(OffsetLimit, enabled ? _targetFps : 0);
+        memory.WriteInt32(OffsetAverage, 0);
+        memory.WriteInt32(OffsetLow, 0);
+        memory.WriteInt32(OffsetFrameTime, 0);
     }
 }

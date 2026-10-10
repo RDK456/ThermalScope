@@ -3,7 +3,6 @@ using System.Globalization;
 using System.Management;
 using System.Text.RegularExpressions;
 using LibreHardwareMonitor.Hardware;
-using LibreHardwareMonitor.PawnIo;
 using ThermalScope.Models;
 
 namespace ThermalScope.Services;
@@ -105,12 +104,6 @@ public sealed class HardwareMonitorService : IDisposable
                 startupNotice = $"Windows performance counters are unavailable: {exception.Message}";
             }
 
-            var pawnIoNotice = GetPawnIoNotice();
-            if (pawnIoNotice is not null)
-            {
-                startupNotice = BuildNotice(startupNotice, pawnIoNotice);
-            }
-
             try
             {
                 computer = CreateComputer();
@@ -202,27 +195,13 @@ public sealed class HardwareMonitorService : IDisposable
         Interlocked.Exchange(ref _refreshRequested, 0);
     }
 
-    private static string? GetPawnIoNotice()
-    {
-        try
-        {
-            return PawnIo.IsInstalled
-                ? null
-                : "PawnIO is not installed; some hardware temperature sensors may be unavailable.";
-        }
-        catch (Exception exception)
-        {
-            return $"PawnIO status could not be determined: {exception.Message}";
-        }
-    }
-
     private static Computer CreateComputer() => new()
     {
         IsCpuEnabled = true,
         IsGpuEnabled = true,
         IsMemoryEnabled = false,
-        IsMotherboardEnabled = true,
-        IsControllerEnabled = true,
+        IsMotherboardEnabled = false, // board/SuperIO temperatures are never shown as CPU or GPU values
+        IsControllerEnabled = false,
         IsNetworkEnabled = false,
         IsStorageEnabled = false
     };
@@ -250,7 +229,17 @@ public sealed class HardwareMonitorService : IDisposable
             .Where(item => item.HardwareType == HardwareType.Cpu || IsGpuHardware(item))
             .ToList() ?? new List<IHardware>();
         var cpuHardware = hardware.FirstOrDefault(item => item.HardwareType == HardwareType.Cpu);
-        var gpuHardware = hardware.FirstOrDefault(IsGpuHardware);
+        // Prefer the discrete card: NVIDIA, then AMD, then Intel; the one with the most memory wins a tie.
+        var gpuHardware = hardware
+            .Where(IsGpuHardware)
+            .OrderBy(item => item.HardwareType switch
+            {
+                HardwareType.GpuNvidia => 0,
+                HardwareType.GpuAmd => 1,
+                _ => 2
+            })
+            .ThenByDescending(GpuMemoryMegabytes)
+            .FirstOrDefault();
         var cpuSensors = GetSensors(cpuHardware);
         var gpuSensors = GetSensors(gpuHardware);
 
@@ -265,6 +254,48 @@ public sealed class HardwareMonitorService : IDisposable
             isGpu: true,
             fallbackUsage: usage.GpuPercent);
 
+        // Windows' own counters fill clock and power when the driver-based sensors are silent.
+        cpu = cpu with
+        {
+            ClockMegahertz = cpu.ClockMegahertz ?? usage.CpuClockMegahertz,
+            PowerWatts = cpu.PowerWatts ?? usage.CpuPowerWatts
+        };
+
+        // Real CPU die readings published by MSI Afterburner, used only for what LibreHardwareMonitor could not
+        // read (no PawnIO driver). Board/ACPI thermal zones are never substituted.
+        var external = AfterburnerReader.TryRead();
+        var externalReadings = new List<SensorReading>();
+        if (external is not null)
+        {
+            if (!cpu.TemperatureCelsius.HasValue && external.Temperature is { } externalTemp)
+            {
+                cpu = cpu with { TemperatureCelsius = externalTemp, TemperatureLabel = "CPU die · MSI Afterburner" };
+            }
+
+            if (!cpu.ClockMegahertz.HasValue && external.ClockMegahertz is { } externalClock)
+            {
+                cpu = cpu with { ClockMegahertz = externalClock };
+            }
+
+            if (!cpu.PowerWatts.HasValue && external.PowerWatts is { } externalPower)
+            {
+                cpu = cpu with { PowerWatts = externalPower };
+            }
+
+            if (!cpuSensors.Any(sensor => sensor.SensorType == SensorType.Temperature && ReadSensorValue(sensor).HasValue))
+            {
+                if (external.Temperature is { } package)
+                {
+                    externalReadings.Add(new SensorReading("CPU", "CPU die (MSI Afterburner)", nameof(SensorType.Temperature), package, "°C"));
+                }
+
+                foreach (var (name, value) in external.ThreadTemperatures)
+                {
+                    externalReadings.Add(new SensorReading("CPU", $"{name.Replace(" temperature", string.Empty)} (MSI Afterburner)", nameof(SensorType.Temperature), value, "°C"));
+                }
+            }
+        }
+
         var readings = hardware
             .SelectMany(FlattenHardware)
             .SelectMany(item => item.Sensors)
@@ -275,26 +306,35 @@ public sealed class HardwareMonitorService : IDisposable
                 sensor.SensorType.ToString(),
                 ReadSensorValue(sensor),
                 GetUnit(sensor.SensorType)))
+            .Concat(externalReadings)
             .OrderBy(reading => reading.Component == "CPU" ? 0 : 1)
+            .ThenBy(reading => reading.Value.HasValue ? 0 : 1) // working sensors first, silent ones last
             .ThenByDescending(reading => reading.Category == nameof(SensorType.Temperature))
-            .ThenBy(reading => reading.Value.HasValue ? 0 : 1)
             .ThenBy(reading => reading.Category)
-            .ThenBy(reading => reading.Name)
+            .ThenBy(reading => NaturalKey(reading.Name), StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         var noticeParts = new[] { startupNotice, updateNotice }
             .Where(part => !string.IsNullOrWhiteSpace(part))
             .ToArray();
         var source = computer is null ? "Windows performance counters" : "LibreHardwareMonitor";
+        if (externalReadings.Count > 0 || (external is not null && cpu.TemperatureLabel.Contains("Afterburner")))
+        {
+            source += " + MSI Afterburner";
+        }
         var notice = noticeParts.Length == 0 ? null : string.Join("  ", noticeParts);
+
+        // Only CPU die/package sensors are ever used for the CPU value. Windows exposes no driver-free
+        // equivalent: ACPI thermal zones are motherboard/ambient readings and are deliberately ignored.
+        var cpuSensorsNeedDriver = cpuHardware is not null && !cpu.TemperatureCelsius.HasValue;
 
         if (cpuHardware is null || gpuHardware is null)
         {
             notice = BuildNotice(notice, "Some CPU or GPU hardware was not reported by the sensor backend.");
         }
-        else if (!cpu.TemperatureCelsius.HasValue && !gpu.TemperatureCelsius.HasValue)
+        else if (!cpuSensorsNeedDriver && !gpu.TemperatureCelsius.HasValue)
         {
-            notice = BuildNotice(notice, "No CPU/GPU temperature sensors were reported. Run as administrator if your hardware requires it.");
+            notice = BuildNotice(notice, "No GPU temperature sensor was reported by the graphics driver.");
         }
 
         return new MonitorSnapshot(
@@ -303,7 +343,8 @@ public sealed class HardwareMonitorService : IDisposable
             gpu,
             readings,
             source,
-            notice);
+            notice,
+            cpuSensorsNeedDriver);
     }
 
     private static MetricSnapshot CreateMetric(
@@ -325,6 +366,10 @@ public sealed class HardwareMonitorService : IDisposable
             clock,
             power);
     }
+
+    // "Core #2" sorts before "Core #10".
+    private static string NaturalKey(string name) =>
+        Regex.Replace(name, @"\d+", match => match.Value.PadLeft(6, '0'));
 
     private static bool IsGpuHardware(IHardware hardware) =>
         hardware.HardwareType.ToString().StartsWith("Gpu", StringComparison.OrdinalIgnoreCase);
@@ -417,7 +462,7 @@ public sealed class HardwareMonitorService : IDisposable
             .ToList();
         var preferredNames = isGpu
             ? new[] { "gpu core", "core", "temperature", "gpu" }
-            : new[] { "tctl", "tdie", "package", "core average", "average", "core" };
+            : new[] { "cpu package", "tctl", "tdie", "package", "core max", "core average", "average", "core" };
 
         var selected = FindByName(availableCandidates, preferredNames);
         selected ??= availableCandidates.FirstOrDefault();
@@ -482,15 +527,36 @@ public sealed class HardwareMonitorService : IDisposable
             return null;
         }
 
+        if (!isGpu)
+        {
+            // Average of the per-core clocks (the bus speed sensor is not a core clock).
+            var cores = clocks
+                .Where(sensor => sensor.Name.Contains("core", StringComparison.OrdinalIgnoreCase) &&
+                                 !sensor.Name.Contains("effective", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (cores.Count > 0)
+            {
+                return cores.Average(sensor => ReadSensorValue(sensor) ?? 0);
+            }
+        }
+
         var selected = FindByName(
             clocks,
             isGpu
                 ? new[] { "gpu core", "core", "graphics" }
                 : new[] { "cpu core", "core", "cpu" });
         selected ??= clocks[0];
-        var value = ReadSensorValue(selected) ?? 0;
-        return value > 1000 ? value / 1000 : value;
+        return ReadSensorValue(selected); // megahertz; the UI picks MHz or GHz
     }
+
+    private static double GpuMemoryMegabytes(IHardware hardware) =>
+        FlattenHardware(hardware)
+            .SelectMany(item => item.Sensors)
+            .Where(sensor => sensor.SensorType == SensorType.SmallData &&
+                             sensor.Name.Contains("memory total", StringComparison.OrdinalIgnoreCase))
+            .Select(sensor => ReadSensorValue(sensor) ?? 0)
+            .DefaultIfEmpty(0)
+            .Max();
 
     private static double? SelectPower(IEnumerable<ISensor> sensors, bool isGpu)
     {
@@ -508,7 +574,9 @@ public sealed class HardwareMonitorService : IDisposable
                 ? new[] { "gpu power", "power", "total" }
                 : new[] { "cpu package", "package", "cpu total", "total" });
         selected ??= powerSensors[0];
-        return ReadSensorValue(selected);
+        var watts = ReadSensorValue(selected);
+        // Without ring-0 access the CPU package power reads a constant 0, which is "no data", not 0 W.
+        return !isGpu && watts is <= 0 ? null : watts;
     }
 
     private static bool IsAuxiliaryTemperature(string name) =>
@@ -571,16 +639,28 @@ public sealed class HardwareMonitorService : IDisposable
         }
     }
 
-    private readonly record struct UsageSample(double? CpuPercent, double? GpuPercent);
+    private readonly record struct UsageSample(
+        double? CpuPercent,
+        double? GpuPercent,
+        double? CpuClockMegahertz = null,
+        double? CpuPowerWatts = null);
 
     private sealed class WindowsUsageProvider : IDisposable
     {
         private PerformanceCounter? _cpuCounter;
+        private PerformanceCounter? _performanceCounter; // % of base frequency (above 100 = turbo)
+        private PerformanceCounter? _frequencyCounter;   // base frequency in MHz
+        private PerformanceCounter? _packagePowerCounter; // RAPL package power in milliwatts, when the platform exposes it
         private double? _lastGpuPercent;
         private int _sampleCount;
 
         public WindowsUsageProvider()
         {
+            // Driver-free CPU clock and package power straight from Windows (what Task Manager uses).
+            _performanceCounter = TryCounter("Processor Information", "% Processor Performance", "_Total");
+            _frequencyCounter = TryCounter("Processor Information", "Processor Frequency", "_Total");
+            _packagePowerCounter = TryCounter("Energy Meter", "Power", "RAPL_Package0_PKG");
+
             try
             {
                 _cpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total", true);
@@ -613,12 +693,50 @@ public sealed class HardwareMonitorService : IDisposable
                 _lastGpuPercent = QueryGpuUsage();
             }
 
-            return new UsageSample(cpu, _lastGpuPercent);
+            double? clock = null;
+            double? power = null;
+            try
+            {
+                if (_performanceCounter is not null && _frequencyCounter is not null)
+                {
+                    var mhz = _performanceCounter.NextValue() / 100.0 * _frequencyCounter.NextValue();
+                    clock = mhz > 0 && double.IsFinite(mhz) ? mhz : null;
+                }
+
+                if (_packagePowerCounter is not null)
+                {
+                    var watts = _packagePowerCounter.NextValue() / 1000.0;
+                    power = watts > 0 && double.IsFinite(watts) ? watts : null;
+                }
+            }
+            catch
+            {
+                // Counters can disappear during sleep/wake; the next sample simply has no value.
+            }
+
+            return new UsageSample(cpu, _lastGpuPercent, clock, power);
+        }
+
+        private static PerformanceCounter? TryCounter(string category, string counter, string instance)
+        {
+            try
+            {
+                var created = new PerformanceCounter(category, counter, instance, true);
+                created.NextValue(); // the first reading of a rate counter is always 0
+                return created;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         public void Dispose()
         {
             _cpuCounter?.Dispose();
+            _performanceCounter?.Dispose();
+            _frequencyCounter?.Dispose();
+            _packagePowerCounter?.Dispose();
         }
 
         private static double? QueryGpuUsage()

@@ -5,22 +5,34 @@ using ThermalScope.Models;
 
 namespace ThermalScope.Services;
 
+/// <summary>Finds the game, attaches the frame pacer helper, applies per-game limits and publishes live stats.</summary>
 public sealed class GameMonitorService : IDisposable
 {
+    public const int MinFps = 20;
+    public const int MaxFps = 500;
+    private const int TickMilliseconds = 250;
+    private const int ScanEveryTicks = 8;            // process list refresh, ~2 s
+    private const int GraphFrames = 240;
+    private const int HookTimeoutSeconds = 15;
+
     private readonly object _gate = new();
     private readonly string _settingsPath;
     private readonly int _ownProcessId = Environment.ProcessId;
+    private readonly GameMonitorSettings _settings;
     private CancellationTokenSource? _cancellation;
     private Task? _worker;
-    private string? _selectedExecutable;
-    private bool _autoMonitor = true;
     private int _refreshRequested;
     private bool _disposed;
     private GameFpsMonitor? _fpsMonitor;
+    private List<GameProcessInfo> _processes = new();
+    private int _ticksSinceScan = ScanEveryTicks;
+    private DetectedGame? _detected;
     private bool _monitorAttached;
-    private string? _attachedExecutable;
     private int _attachedProcessId;
+    private DateTime _attachedAtUtc;
     private string? _lastError;
+    private string? _currentExecutable;
+    private bool _limiterOn = true;
 
     public GameMonitorService()
     {
@@ -30,9 +42,8 @@ public sealed class GameMonitorService : IDisposable
             localAppData = AppContext.BaseDirectory;
         }
 
-        var directory = Path.Combine(localAppData, "ThermalScope");
-        _settingsPath = Path.Combine(directory, "game-monitor.json");
-        LoadSettings();
+        _settingsPath = Path.Combine(localAppData, "ThermalScope", "game-monitor.json");
+        _settings = LoadSettings();
     }
 
     public event Action<GameMonitorSnapshot>? SnapshotReady;
@@ -42,7 +53,7 @@ public sealed class GameMonitorService : IDisposable
     {
         lock (_gate)
         {
-            if (_disposed || (_worker is { IsCompleted: false }))
+            if (_disposed || _worker is { IsCompleted: false })
             {
                 return;
             }
@@ -53,6 +64,7 @@ public sealed class GameMonitorService : IDisposable
         }
     }
 
+    /// <summary>Manual override: always monitor this executable instead of the auto-detected game.</summary>
     public void Configure(string executableName, bool autoMonitor)
     {
         var normalized = NormalizeExecutableName(executableName);
@@ -63,23 +75,84 @@ public sealed class GameMonitorService : IDisposable
 
         lock (_gate)
         {
-            _selectedExecutable = normalized;
-            _autoMonitor = autoMonitor;
+            _settings.ExecutableName = normalized;
+            _settings.AutoMonitor = autoMonitor;
             _lastError = null;
             SaveSettings();
-            Interlocked.Exchange(ref _refreshRequested, 1);
+            Refresh();
         }
     }
 
-    public void Clear()
+    /// <summary>Drops the manual override and goes back to detecting the game automatically.</summary>
+    public void UseAutoDetect()
     {
         lock (_gate)
         {
-            _selectedExecutable = null;
-            _autoMonitor = false;
+            _settings.ExecutableName = null;
+            _settings.AutoDetect = true;
+            _detected = null;
             _lastError = null;
             SaveSettings();
-            Interlocked.Exchange(ref _refreshRequested, 1);
+            Refresh();
+        }
+    }
+
+    public void SetAutoMonitor(bool enabled)
+    {
+        lock (_gate)
+        {
+            _settings.AutoMonitor = enabled;
+            SaveSettings();
+            Refresh();
+        }
+    }
+
+    /// <summary>Stores the limit for the current game (or as the default for new games) and applies it live.</summary>
+    public void SetLimit(int fps)
+    {
+        lock (_gate)
+        {
+            var value = fps <= 0 ? 0 : Math.Clamp(fps, MinFps, MaxFps);
+            _settings.DefaultFps = value;
+            if (_currentExecutable is not null)
+            {
+                _settings.Limits[_currentExecutable] = value;
+            }
+
+            SaveSettings();
+            Refresh();
+        }
+    }
+
+    /// <summary>Hotkey helper: change the limit by a step; starts from 60 when it was unlimited.</summary>
+    public void NudgeLimit(int delta)
+    {
+        int current;
+        lock (_gate)
+        {
+            current = EffectiveStoredLimit(_currentExecutable);
+        }
+
+        SetLimit(current <= 0 ? 60 : Math.Clamp(current + delta, MinFps, MaxFps));
+    }
+
+    public void SetLimiterEnabled(bool enabled)
+    {
+        lock (_gate)
+        {
+            _limiterOn = enabled;
+            Refresh();
+        }
+    }
+
+    public bool LimiterEnabled
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _limiterOn;
+            }
         }
     }
 
@@ -119,6 +192,12 @@ public sealed class GameMonitorService : IDisposable
         }
     }
 
+    private void Refresh()
+    {
+        _ticksSinceScan = ScanEveryTicks;
+        Interlocked.Exchange(ref _refreshRequested, 1);
+    }
+
     private async Task RunAsync(CancellationToken cancellationToken)
     {
         try
@@ -137,7 +216,7 @@ public sealed class GameMonitorService : IDisposable
 
                 try
                 {
-                    await WaitForNextSampleAsync(cancellationToken).ConfigureAwait(false);
+                    await WaitForNextTickAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -155,128 +234,212 @@ public sealed class GameMonitorService : IDisposable
         }
         finally
         {
-            if (_fpsMonitor is not null)
-            {
-                var stopError = string.Empty;
-                StopMonitor(_fpsMonitor, ref stopError);
-            }
-
+            // Releases the limiter inside the game before the process goes away.
             _fpsMonitor?.Dispose();
             _fpsMonitor = null;
         }
     }
 
-    private async Task WaitForNextSampleAsync(CancellationToken cancellationToken)
+    private async Task WaitForNextTickAsync(CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
-        while (stopwatch.Elapsed < TimeSpan.FromSeconds(1))
+        while (stopwatch.ElapsedMilliseconds < TickMilliseconds)
         {
             if (Interlocked.Exchange(ref _refreshRequested, 0) == 1)
             {
                 return;
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
+            await Task.Delay(50, cancellationToken).ConfigureAwait(false);
         }
-
-        Interlocked.Exchange(ref _refreshRequested, 0);
     }
 
     private GameMonitorSnapshot Capture()
     {
-        string? selectedExecutable;
-        bool autoMonitor;
+        string? manualExecutable;
+        bool autoDetect, autoMonitor, limiterOn;
         lock (_gate)
         {
-            selectedExecutable = _selectedExecutable;
-            autoMonitor = _autoMonitor;
+            manualExecutable = _settings.ExecutableName;
+            autoDetect = _settings.AutoDetect;
+            autoMonitor = _settings.AutoMonitor;
+            limiterOn = _limiterOn;
         }
 
-        var processList = EnumerateProcesses(selectedExecutable);
-        var selectedProcess = processList.FirstOrDefault(process =>
-            selectedExecutable is not null &&
-            process.Name.Equals(selectedExecutable, StringComparison.OrdinalIgnoreCase));
+        if (++_ticksSinceScan >= ScanEveryTicks)
+        {
+            _processes = EnumerateProcesses(manualExecutable);
+            _ticksSinceScan = 0;
+        }
+
+        // Which game are we dealing with?
+        GameProcessInfo? target = null;
+        var executable = manualExecutable;
+        var autoDetected = false;
+        if (executable is not null)
+        {
+            target = _processes.FirstOrDefault(p => p.Name.Equals(executable, StringComparison.OrdinalIgnoreCase));
+        }
+        else if (autoDetect)
+        {
+            RefreshDetectedGame();
+            if (_detected is { } detected)
+            {
+                executable = detected.ExecutableName;
+                autoDetected = true;
+                target = _processes.FirstOrDefault(p => p.ProcessId == detected.ProcessId)
+                    ?? new GameProcessInfo(detected.ProcessId, detected.ExecutableName, detected.WindowTitle, 0, null);
+            }
+        }
+
+        int storedLimit;
+        lock (_gate)
+        {
+            _currentExecutable = executable;
+            storedLimit = EffectiveStoredLimit(executable);
+        }
 
         var monitor = _fpsMonitor;
-        var monitorAvailable = monitor?.IsAvailable == true;
-        var monitorStatus = monitor?.Status ?? "The FPS monitor has not been initialized.";
-        var error = _lastError;
-        var monitorAttached = _monitorAttached;
-        var status = string.Empty;
+        var available = monitor?.IsAvailable == true;
+        var consent = AppSettings.Current.FpsConsentAccepted;
+        var consentRequired = false;
+        string status;
+        string? error = _lastError;
 
-        if (string.IsNullOrWhiteSpace(selectedExecutable))
+        if (executable is null)
         {
-            StopMonitor(monitor, ref error);
-            status = "Select a game executable to monitor FPS.";
+            StopMonitor(monitor);
+            status = autoDetect
+                ? "Waiting for a game. Start one in borderless fullscreen and it is picked up automatically."
+                : "Pick a game to monitor.";
         }
-        else if (selectedProcess is null)
+        else if (target is null)
         {
-            StopMonitor(monitor, ref error);
-            status = $"Waiting for {selectedExecutable} to open.";
+            StopMonitor(monitor);
+            status = $"Waiting for {executable} to open.";
         }
         else if (!autoMonitor)
         {
-            StopMonitor(monitor, ref error);
-            status = $"{selectedExecutable} is running; automatic FPS monitoring is off.";
+            StopMonitor(monitor);
+            status = $"{executable} is running. Automatic pacing is off.";
         }
-        else if (!monitorAvailable)
+        else if (!available)
         {
-            StopMonitor(monitor, ref error);
-            status = $"{selectedExecutable} is running, but the standalone FPS monitor is unavailable.";
+            StopMonitor(monitor);
+            status = $"{executable} is running, but the frame pacer is unavailable.";
+            error ??= monitor?.Status;
+        }
+        else if (!consent)
+        {
+            StopMonitor(monitor);
+            consentRequired = true;
+            status = $"{executable} found. Allow ThermalScope to attach to it to start limiting.";
         }
         else
         {
-            var targetChanged = !_monitorAttached ||
-                !string.Equals(_attachedExecutable, selectedExecutable, StringComparison.OrdinalIgnoreCase) ||
-                _attachedProcessId != selectedProcess.ProcessId;
-            if (targetChanged)
+            if (!_monitorAttached || _attachedProcessId != target.ProcessId)
             {
-                StopMonitor(monitor, ref error);
-                if (monitor!.TryAttach(selectedProcess.ProcessId, out var attachError))
+                StopMonitor(monitor);
+                if (monitor!.TryAttach(target.ProcessId, out var attachError))
                 {
-                    _attachedExecutable = selectedExecutable;
-                    _attachedProcessId = selectedProcess.ProcessId;
                     _monitorAttached = true;
-                    _lastError = null;
-                    error = null;
-                    monitorAttached = true;
-                    status = $"{selectedExecutable} running · FPS monitor active.";
+                    _attachedProcessId = target.ProcessId;
+                    _attachedAtUtc = DateTime.UtcNow;
+                    _lastError = error = null;
                 }
                 else
                 {
-                    _lastError = attachError;
-                    error = attachError;
-                    monitorAttached = false;
-                    status = $"{selectedExecutable} is running; FPS monitoring could not attach.";
+                    _lastError = error = attachError;
+                }
+            }
+
+            if (_monitorAttached)
+            {
+                monitor!.SetTargetFps(limiterOn ? storedLimit : 0);
+                if (monitor.IsHookReady)
+                {
+                    status = limiterOn && storedLimit > 0
+                        ? $"Limiting {executable} to {storedLimit} FPS."
+                        : $"Watching {executable}. No frame limit is set.";
+                    _lastError = error = null;
+                }
+                else if ((DateTime.UtcNow - _attachedAtUtc).TotalSeconds > HookTimeoutSeconds)
+                {
+                    status = $"Attached to {executable}, but no DirectX 10/11/12 swap chain was found.";
+                    error = "Vulkan, OpenGL, DirectX 9 and 32-bit games are not supported yet.";
+                }
+                else
+                {
+                    status = $"Attached to {executable}. Waiting for it to start rendering…";
                 }
             }
             else
             {
-                monitorAttached = true;
-                status = $"{selectedExecutable} running · FPS monitor active.";
+                status = $"{executable} is running, but the frame pacer could not attach.";
             }
         }
 
-        monitorAttached = _monitorAttached;
-        var visibleProcesses = processList
-            .Where(process => !string.IsNullOrWhiteSpace(process.WindowTitle) || process.Name.Equals(selectedExecutable, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(process => process.Name.Equals(selectedExecutable, StringComparison.OrdinalIgnoreCase))
-            .ThenBy(process => process.WindowTitle.Length == 0 ? process.Name : process.WindowTitle)
-            .Take(20)
-            .ToList();
+        FpsSample? sample = null;
+        var frameTimes = Array.Empty<float>();
+        if (_monitorAttached && target is not null && monitor is not null)
+        {
+            sample = monitor.ReadFps(target.ProcessId);
+            frameTimes = monitor.ReadFrameTimes(target.ProcessId, GraphFrames);
+            target = target with { Fps = sample };
+        }
 
         return new GameMonitorSnapshot(
             DateTimeOffset.Now,
-            visibleProcesses,
-            selectedProcess,
-            selectedExecutable,
+            _processes,
+            target,
+            executable,
+            autoDetected,
             autoMonitor,
-            monitorAvailable,
-            monitorAttached,
-            monitorStatus,
+            available,
+            _monitorAttached,
+            _monitorAttached && monitor?.IsHookReady == true,
+            consentRequired,
+            storedLimit,
+            limiterOn,
+            frameTimes,
             status,
             error);
     }
+
+    private void RefreshDetectedGame()
+    {
+        // Sticky: keep the last game while it is alive, even when ThermalScope itself has the focus.
+        if (_detected is { } current && IsAlive(current.ProcessId))
+        {
+            var foreground = GameDetector.FindForegroundGame(_ownProcessId);
+            if (foreground is not null && foreground.ProcessId != current.ProcessId)
+            {
+                _detected = foreground;
+            }
+
+            return;
+        }
+
+        _detected = GameDetector.FindForegroundGame(_ownProcessId);
+    }
+
+    private static bool IsAlive(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private int EffectiveStoredLimit(string? executable) =>
+        executable is not null && _settings.Limits.TryGetValue(executable, out var limit)
+            ? limit
+            : _settings.DefaultFps;
 
     private List<GameProcessInfo> EnumerateProcesses(string? selectedExecutable)
     {
@@ -300,21 +463,15 @@ public sealed class GameMonitorService : IDisposable
                     continue;
                 }
 
-                process.Refresh();
                 var title = process.MainWindowTitle ?? string.Empty;
                 var executableName = NormalizeExecutableName(process.ProcessName) ?? $"{process.ProcessName}.exe";
-                if (string.IsNullOrWhiteSpace(title) &&
-                    !executableName.Equals(selectedExecutable, StringComparison.OrdinalIgnoreCase))
+                var isSelected = executableName.Equals(selectedExecutable, StringComparison.OrdinalIgnoreCase);
+                if (string.IsNullOrWhiteSpace(title) && !isSelected)
                 {
                     continue;
                 }
 
-                result.Add(new GameProcessInfo(
-                    process.Id,
-                    executableName,
-                    title,
-                    Math.Max(0, process.WorkingSet64),
-                    _fpsMonitor?.ReadFps(process.Id)));
+                result.Add(new GameProcessInfo(process.Id, executableName, title, Math.Max(0, process.WorkingSet64), null));
             }
             catch
             {
@@ -326,71 +483,54 @@ public sealed class GameMonitorService : IDisposable
             }
         }
 
-        return result;
+        return result
+            .OrderBy(p => p.WindowTitle.Length == 0 ? 1 : 0)
+            .ThenBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(60)
+            .ToList();
     }
 
-    private void StopMonitor(GameFpsMonitor? monitor, ref string? error)
+    private void StopMonitor(GameFpsMonitor? monitor)
     {
         if (!_monitorAttached || monitor is null)
         {
             return;
         }
 
-        if (monitor.Disable())
-        {
-            _monitorAttached = false;
-            _attachedExecutable = null;
-            _attachedProcessId = 0;
-            _lastError = null;
-            error = null;
-        }
-        else
-        {
-            _lastError = "The FPS monitor could not be stopped cleanly.";
-            error = _lastError;
-        }
+        monitor.Disable();
+        _monitorAttached = false;
+        _attachedProcessId = 0;
     }
 
-    private void LoadSettings()
+    private GameMonitorSettings LoadSettings()
     {
         try
         {
-            if (!File.Exists(_settingsPath))
+            if (File.Exists(_settingsPath))
             {
-                return;
+                var loaded = JsonSerializer.Deserialize<GameMonitorSettings>(File.ReadAllText(_settingsPath));
+                if (loaded is not null)
+                {
+                    loaded.ExecutableName = NormalizeExecutableName(loaded.ExecutableName ?? string.Empty);
+                    loaded.Limits = new Dictionary<string, int>(loaded.Limits, StringComparer.OrdinalIgnoreCase);
+                    return loaded;
+                }
             }
-
-            var settings = JsonSerializer.Deserialize<GameMonitorSettings>(File.ReadAllText(_settingsPath));
-            if (settings is null)
-            {
-                return;
-            }
-
-            _selectedExecutable = NormalizeExecutableName(settings.ExecutableName ?? string.Empty);
-            _autoMonitor = settings.AutoMonitor;
         }
         catch
         {
             // Invalid settings should not prevent the monitor from starting.
         }
+
+        return new GameMonitorSettings();
     }
 
     private void SaveSettings()
     {
         try
         {
-            var directory = Path.GetDirectoryName(_settingsPath);
-            if (!string.IsNullOrWhiteSpace(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            var settings = new GameMonitorSettings
-            {
-                ExecutableName = _selectedExecutable,
-                AutoMonitor = _autoMonitor
-            };
-            File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
+            Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
+            File.WriteAllText(_settingsPath, JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch
         {
@@ -411,14 +551,15 @@ public sealed class GameMonitorService : IDisposable
             return null;
         }
 
-        return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-            ? name
-            : $"{name}.exe";
+        return name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name : $"{name}.exe";
     }
 
     private sealed class GameMonitorSettings
     {
         public string? ExecutableName { get; set; }
         public bool AutoMonitor { get; set; } = true;
+        public bool AutoDetect { get; set; } = true;
+        public int DefaultFps { get; set; }
+        public Dictionary<string, int> Limits { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }

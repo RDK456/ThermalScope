@@ -1,51 +1,69 @@
+#requires -Version 5.1
+<#
+.SYNOPSIS
+  Rebuilds native\ThermalScopeHook.dll (x64) with MSVC and MinHook 1.3.4.
+
+.DESCRIPTION
+  Needs Visual Studio Build Tools with the "Desktop development with C++" workload
+  (any 2019/2022 edition). MinHook is cloned on demand into native\minhook-1.3.4.
+  The CRT is linked statically (/MT) so the DLL loads in games without a VC++ redistributable.
+#>
 param(
-    [string]$Toolchain = $env:LLVM_MINGW_ROOT,
     [string]$MinHookSource = "$PSScriptRoot\minhook-1.3.4"
 )
 
 $ErrorActionPreference = 'Stop'
-if ([string]::IsNullOrWhiteSpace($Toolchain)) {
-    $Toolchain = 'C:\path\to\llvm-mingw\bin'
+
+if (-not (Test-Path (Join-Path $MinHookSource 'include\MinHook.h'))) {
+    Write-Host 'Fetching MinHook v1.3.4...'
+    git clone --quiet --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git $MinHookSource
+    if ($LASTEXITCODE -ne 0) { throw 'Could not clone MinHook v1.3.4.' }
 }
 
-$clang = Join-Path $Toolchain 'clang.exe'
-$clangxx = Join-Path $Toolchain 'clang++.exe'
-if (-not (Test-Path $clang) -or -not (Test-Path $clangxx)) {
-    throw "Set LLVM_MINGW_ROOT to an llvm-mingw x64 bin directory."
-}
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+if (-not (Test-Path $vswhere)) { throw 'Visual Studio Build Tools were not found (vswhere.exe is missing).' }
+$installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+if (-not $installPath) { throw 'Install the "Desktop development with C++" workload of Visual Studio Build Tools.' }
+$vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
 
-$required = @(
-    'include\MinHook.h',
-    'src\buffer.c',
-    'src\trampoline.c',
-    'src\hook.c',
-    'src\hde\hde64.c'
-)
-foreach ($relative in $required) {
-    if (-not (Test-Path (Join-Path $MinHookSource $relative))) {
-        throw "MinHook source is missing: $relative"
-    }
-}
+$source = Join-Path $MinHookSource 'src'
+$sources = @(
+    (Join-Path $source 'buffer.c'),
+    (Join-Path $source 'hook.c'),
+    (Join-Path $source 'trampoline.c'),
+    (Join-Path $source 'hde\hde64.c'),
+    (Join-Path $PSScriptRoot 'ThermalScopeHook.cpp')
+) | ForEach-Object { '"{0}"' -f $_ }
 
+$output = Join-Path $PSScriptRoot 'ThermalScopeHook.dll'
 $build = Join-Path $env:TEMP 'ThermalScope-native-build'
 Remove-Item $build -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $build | Out-Null
-$include = Join-Path $MinHookSource 'include'
-$source = Join-Path $MinHookSource 'src'
-$hde = Join-Path $source 'hde'
-$common = @('-O2', '-D_WIN32_WINNT=0x0A00', '-I', $include, '-I', $source)
 
-& $clang -c @common (Join-Path $source 'buffer.c') -o (Join-Path $build 'buffer.o')
-& $clang -c @common (Join-Path $source 'trampoline.c') -o (Join-Path $build 'trampoline.o')
-& $clang -c @common (Join-Path $source 'hook.c') -o (Join-Path $build 'hook.o')
-& $clang -c @common '-I' $hde (Join-Path $hde 'hde64.c') -o (Join-Path $build 'hde64.o')
-& $clangxx -c -O2 -std=c++17 -D_WIN32_WINNT=0x0A00 -I $include -I $PSScriptRoot (Join-Path $PSScriptRoot 'ThermalScopeHook.cpp') -o (Join-Path $build 'ThermalScopeHook.o')
-& $clangxx -shared -O2 -o (Join-Path $PSScriptRoot 'ThermalScopeHook.dll') `
-    (Join-Path $build 'buffer.o') `
-    (Join-Path $build 'trampoline.o') `
-    (Join-Path $build 'hook.o') `
-    (Join-Path $build 'hde64.o') `
-    (Join-Path $build 'ThermalScopeHook.o') `
-    -ld3d11 -ld3d12 -ldxgi -lole32 -luser32
+$compile = 'cl /nologo /LD /MT /O2 /GS /W3 /std:c++17 /D_WIN32_WINNT=0x0A00 ' +
+    ('/I"{0}" /I"{1}" ' -f (Join-Path $MinHookSource 'include'), $source) +
+    ('/Fo"{0}\\" ' -f $build) + ('/Fe"{0}" ' -f $output) + ($sources -join ' ') +
+    ' /link /DYNAMICBASE /NXCOMPAT /guard:cf d3d11.lib d3d12.lib dxgi.lib ole32.lib user32.lib'
 
-Write-Host "Built $PSScriptRoot\ThermalScopeHook.dll"
+# Some Build Tools installs ship the Windows SDK without registering it, so vcvars64 misses it.
+$kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10'
+$sdk = Get-ChildItem (Join-Path $kits 'Include') -Directory -ErrorAction SilentlyContinue |
+    Where-Object { Test-Path (Join-Path $_.FullName 'um\d3d12.h') } |
+    Sort-Object Name -Descending | Select-Object -First 1
+if (-not $sdk) { throw 'The Windows 10/11 SDK is missing. Add it to Visual Studio Build Tools.' }
+$sdkInclude = ('ucrt', 'um', 'shared' | ForEach-Object { Join-Path $sdk.FullName $_ }) -join ';'
+$sdkLib = ('ucrt', 'um' | ForEach-Object { Join-Path $kits "Lib\$($sdk.Name)\$_\x64" }) -join ';'
+
+$script = Join-Path $build 'build.cmd'
+Set-Content $script -Encoding ascii -Value @(
+    '@echo off',
+    ('set "PATH=%PATH%;{0}"' -f (Split-Path $vswhere)),
+    ('call "{0}" >nul' -f $vcvars),
+    ('set "INCLUDE=%INCLUDE%;{0}"' -f $sdkInclude),
+    ('set "LIB=%LIB%;{0}"' -f $sdkLib),
+    $compile)
+& "$env:SystemRoot\System32\cmd.exe" /c $script
+if ($LASTEXITCODE -ne 0) { throw "cl.exe failed with exit code $LASTEXITCODE." }
+
+Write-Host "Built $output ($((Get-Item $output).Length) bytes)"
+Write-Host ('SHA-256: ' + (Get-FileHash $output -Algorithm SHA256).Hash)

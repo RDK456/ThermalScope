@@ -1,735 +1,691 @@
 <Window x:Class="ThermalScope.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:c="clr-namespace:ThermalScope.Controls"
+        xmlns:vm="clr-namespace:ThermalScope.ViewModels"
         Title="ThermalScope"
+        Icon="Assets/app.ico"
         Width="1180"
-        Height="780"
-        MinWidth="1000"
-        MinHeight="680"
+        Height="800"
+        MinWidth="980"
+        MinHeight="660"
         WindowStartupLocation="CenterScreen"
-        WindowStyle="None"
-        AllowsTransparency="True"
-        Background="Transparent"
-        FontFamily="Segoe UI"
+        Background="{DynamicResource WindowBackdrop}"
+        Foreground="{DynamicResource TextBrush}"
+        FontFamily="{DynamicResource BodyFont}"
+        FontSize="13"
         UseLayoutRounding="True"
-        TextOptions.TextFormattingMode="Display"
-        PreviewKeyDown="Window_PreviewKeyDown"
-        Loaded="Window_Loaded">
+        SnapsToDevicePixels="True"
+        PreviewKeyDown="Window_PreviewKeyDown">
     <WindowChrome.WindowChrome>
-        <WindowChrome CaptionHeight="0"
-                      ResizeBorderThickness="8"
-                      GlassFrameThickness="0" />
+        <WindowChrome CaptionHeight="52"
+                      ResizeBorderThickness="6"
+                      GlassFrameThickness="0"
+                      CornerRadius="0"
+                      UseAeroCaptionButtons="False" />
     </WindowChrome.WindowChrome>
 
     <Window.Resources>
-        <Style x:Key="CardStyle" TargetType="Border">
-            <Setter Property="Background" Value="#11192B" />
-            <Setter Property="BorderBrush" Value="#202C45" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="14" />
-        </Style>
+        <BooleanToVisibilityConverter x:Key="B2V" />
 
-        <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#EDF2FF" />
-            <Setter Property="FontSize" Value="16" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
-
-        <Style x:Key="MetricLabelStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#7E8BA5" />
-            <Setter Property="FontSize" Value="10" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
-        </Style>
-
-        <Style x:Key="MetricValueStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#EDF2FF" />
-            <Setter Property="FontSize" Value="27" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Margin" Value="0,5,0,0" />
-        </Style>
-
-        <Style x:Key="MutedTextStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#7E8BA5" />
-            <Setter Property="FontSize" Value="12" />
-        </Style>
-
-        <Style x:Key="DarkTextBox" TargetType="TextBox">
-            <Setter Property="Background" Value="#0D1628" />
-            <Setter Property="Foreground" Value="#EDF2FF" />
-            <Setter Property="BorderBrush" Value="#2A3754" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="10,8" />
-            <Setter Property="FontSize" Value="12" />
-        </Style>
-
-        <Style x:Key="DarkComboBox" TargetType="ComboBox">
-            <Setter Property="Background" Value="#0D1628" />
-            <Setter Property="Foreground" Value="#EDF2FF" />
-            <Setter Property="BorderBrush" Value="#2A3754" />
-            <Setter Property="Padding" Value="8,6" />
-            <Setter Property="FontSize" Value="12" />
-        </Style>
-
-        <Style x:Key="DarkListBox" TargetType="ListBox">
-            <Setter Property="Background" Value="#0D1628" />
-            <Setter Property="Foreground" Value="#EDF2FF" />
-            <Setter Property="BorderBrush" Value="#263450" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="4" />
-        </Style>
-
-        <Style x:Key="GhostButtonStyle" TargetType="Button">
-            <Setter Property="Foreground" Value="#C8D2E7" />
-            <Setter Property="Background" Value="#151E32" />
-            <Setter Property="BorderBrush" Value="#2A3754" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Padding" Value="12,7" />
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="ButtonSurface"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="8"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ButtonSurface" Property="Background" Value="#1D2A45" />
-                                <Setter TargetName="ButtonSurface" Property="BorderBrush" Value="#4D5E86" />
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="ButtonSurface" Property="Background" Value="#263657" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="WindowButtonStyle" TargetType="Button" BasedOn="{StaticResource GhostButtonStyle}">
-            <Setter Property="Width" Value="32" />
-            <Setter Property="Height" Value="30" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="FontSize" Value="16" />
-            <Setter Property="Margin" Value="5,0,0,0" />
-        </Style>
-
-        <DataTemplate x:Key="SensorRowTemplate">
-            <Border Background="#141E32"
-                    BorderBrush="#202D47"
-                    BorderThickness="1"
-                    CornerRadius="9"
-                    Padding="12,9"
-                    Margin="0,0,0,7">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="72" />
-                        <ColumnDefinition Width="38" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Name}"
-                                   Foreground="#E7EDFA"
-                                   FontSize="12"
-                                   FontWeight="SemiBold"
-                                   TextTrimming="CharacterEllipsis" />
-                        <TextBlock Text="{Binding Detail}"
-                                   Foreground="#72809B"
-                                   FontSize="10"
-                                   Margin="0,3,0,0"
-                                   TextTrimming="CharacterEllipsis" />
-                    </StackPanel>
-                    <TextBlock Grid.Column="1"
-                               Text="{Binding Value}"
-                               Foreground="#E7EDFA"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               HorizontalAlignment="Right"
-                               VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="2"
-                               Text="{Binding Unit}"
-                               Foreground="#7E8BA5"
-                               FontSize="10"
-                               HorizontalAlignment="Right"
-                               VerticalAlignment="Center" />
-                </Grid>
-            </Border>
+        <DataTemplate x:Key="SensorRow" DataType="{x:Type vm:SensorRowViewModel}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="34" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" ToolTip="{Binding Name}" />
+                    <TextBlock Text="{Binding Detail}" Style="{StaticResource Faint}" Margin="0,2,0,0" />
+                </StackPanel>
+                <TextBlock Grid.Column="1" Text="{Binding ValueText}" Foreground="{Binding ValueBrush}"
+                           FontFamily="{DynamicResource DisplayFont}" FontSize="16" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Text="{Binding Unit}" Style="{StaticResource Faint}"
+                           VerticalAlignment="Center" HorizontalAlignment="Right" />
+            </Grid>
         </DataTemplate>
 
-        <DataTemplate x:Key="GameProcessTemplate">
-            <Grid Margin="7,5">
+        <DataTemplate x:Key="ProcessRow" DataType="{x:Type vm:ProcessRowViewModel}">
+            <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel>
-                    <TextBlock Text="{Binding Name}"
-                               Foreground="#E7EDFA"
-                               FontSize="12"
-                               FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding Title}"
-                               Foreground="#72809B"
-                               FontSize="10"
-                               Margin="0,3,0,0"
-                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding Title}" Style="{StaticResource Faint}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
                 </StackPanel>
-                <TextBlock Grid.Column="1"
-                           Text="{Binding Detail}"
-                           Foreground="#7E8BA5"
-                           FontSize="10"
-                           VerticalAlignment="Center"
-                           Margin="10,0,4,0" />
+                <TextBlock Grid.Column="1" Text="{Binding Detail}" Style="{StaticResource Faint}" VerticalAlignment="Center" Margin="12,0,0,0" />
             </Grid>
+        </DataTemplate>
+
+        <!-- CPU / GPU card: temperature dial, load history, key numbers. -->
+        <DataTemplate x:Key="ComponentCard" DataType="{x:Type vm:ComponentViewModel}">
+            <c:Card Padding="20,18">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel>
+                        <TextBlock Text="{Binding Label}" Style="{StaticResource CardTitle}" />
+                        <TextBlock Text="{Binding Name}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding Name}" Margin="0,2,0,0" />
+                    </StackPanel>
+
+                    <Grid Grid.Row="1" Height="196" Margin="0,8,0,0" AutomationProperties.Name="{Binding AutomationName}">
+                        <c:ArcGauge Width="196" Height="196" HorizontalAlignment="Center"
+                                    Fraction="{Binding Fraction}" ArcBrush="{Binding TempBrush}"
+                                    TrackBrush="{DynamicResource TrackBrush}" Thickness="14"
+                                    Mode="{DynamicResource GaugeMode}" PeakFraction="{Binding PeakFraction}"
+                                    TickBrush="{DynamicResource FaintBrush}" />
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,2,0,0">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <TextBlock Text="{Binding TempValue}" Foreground="{Binding TempBrush}"
+                                           FontFamily="{DynamicResource DisplayFont}" FontSize="56" />
+                                <TextBlock Text="{Binding TempUnit}" Foreground="{DynamicResource MutedBrush}"
+                                           FontFamily="{DynamicResource DisplayFont}" FontSize="20" Margin="2,10,0,0" VerticalAlignment="Top" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding StateText}" Foreground="{Binding StateBrush}" FontWeight="SemiBold"
+                                       FontSize="14" HorizontalAlignment="Center" />
+                            <TextBlock Text="{Binding SourceText}" Style="{StaticResource Faint}" HorizontalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" MaxWidth="132" ToolTip="{Binding SourceText}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <StackPanel Grid.Row="2" Margin="0,2,0,6" Visibility="{Binding NoTemp, Converter={StaticResource B2V}}">
+                        <TextBlock Text="{Binding Hint}" Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button Content="Install PawnIO driver" Style="{StaticResource GhostButton}" Click="InstallDriver_Click"
+                                    Visibility="{Binding ShowInstallDriver, Converter={StaticResource B2V}}" />
+                            <Button Content="Restart as administrator" Style="{StaticResource PrimaryButton}" Click="RestartAdmin_Click"
+                                    Visibility="{Binding ShowRestartAdmin, Converter={StaticResource B2V}}" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <Grid Grid.Row="3" Margin="0,8,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid>
+                            <TextBlock Text="Load" Style="{StaticResource Caption}" VerticalAlignment="Bottom" />
+                            <TextBlock Text="{Binding UsageText}" Style="{StaticResource Metric}" HorizontalAlignment="Right" />
+                        </Grid>
+                        <c:Sparkline Grid.Row="1" Height="48" Margin="0,6,0,0" Values="{Binding UsageSeries}"
+                                     Minimum="0" Maximum="100" Stroke="{DynamicResource LoadBrush}"
+                                     GridBrush="{DynamicResource LineBrush}" />
+                    </Grid>
+
+                    <UniformGrid Grid.Row="4" Columns="3" Margin="0,14,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Clock" Style="{StaticResource Caption}" />
+                            <TextBlock Text="{Binding ClockText}" Style="{StaticResource Metric}" FontSize="17" Margin="0,2,0,0" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Text="Power" Style="{StaticResource Caption}" />
+                            <TextBlock Text="{Binding PowerText}" Style="{StaticResource Metric}" FontSize="17" Margin="0,2,0,0" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Text="This session" Style="{StaticResource Caption}" />
+                            <TextBlock Text="{Binding PeakText}" Style="{StaticResource Metric}" FontSize="17" Margin="0,2,0,0" />
+                        </StackPanel>
+                    </UniformGrid>
+                </Grid>
+            </c:Card>
         </DataTemplate>
     </Window.Resources>
 
-    <Border Margin="10" Background="Transparent">
-        <Border Background="{StaticResource PageBrush}"
-                BorderBrush="#26324B"
-                BorderThickness="1"
-                CornerRadius="18">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="68" />
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="38" />
-                </Grid.RowDefinitions>
+    <Grid x:Name="Root">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="52" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="30" />
+        </Grid.RowDefinitions>
 
-                <Grid Grid.Row="0" Margin="26,16,18,12" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+        <!-- ===== Header ===== -->
+        <Grid Grid.Row="0" Margin="20,0,8,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Image Source="Assets/app.ico" Width="24" Height="24" RenderOptions.BitmapScalingMode="HighQuality" />
+                <TextBlock Text="ThermalScope" FontFamily="{DynamicResource DisplayFont}" FontSize="18" Margin="10,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="34,0,0,0" VerticalAlignment="Stretch"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                <RadioButton Content="Monitor" GroupName="Nav" Style="{StaticResource NavTab}"
+                             IsChecked="{Binding IsMonitorView, Mode=OneWay}" Checked="NavMonitor_Checked" />
+                <RadioButton Content="Frame pacer" GroupName="Nav" Style="{StaticResource NavTab}"
+                             IsChecked="{Binding IsPacerView, Mode=OneWay}" Checked="NavPacer_Checked" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                <Border CornerRadius="12" Padding="10,4" Margin="0,0,8,0" Background="{DynamicResource RaisedBrush}"
+                        ToolTip="{Binding StatusText}" AutomationProperties.Name="{Binding StatusText}">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="8" Height="8" Fill="{Binding LiveBrush}" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding LiveText}" Foreground="{Binding LiveBrush}" FontWeight="SemiBold"
+                                   FontSize="12" Margin="7,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+                <Button x:Name="UpdateChip" Content="Update available" Style="{StaticResource PrimaryButton}" Click="UpdateChip_Click"
+                        Visibility="Collapsed" MinHeight="30" Padding="12,4" Margin="0,0,8,0" ToolTip="A newer version is available" />
+                <Button x:Name="RefreshButton" Style="{StaticResource IconButton}" Click="Refresh_Click"
+                        ToolTip="Refresh now (F5)" AutomationProperties.Name="Refresh now">
+                    <TextBlock Style="{StaticResource Glyph}" Text="&#xE72C;" />
+                </Button>
+                <ToggleButton x:Name="PinButton" Style="{StaticResource ChipToggle}" Width="38" Height="36" Padding="0"
+                              Click="Pin_Click" ToolTip="Keep ThermalScope on top" AutomationProperties.Name="Keep on top">
+                    <TextBlock Style="{StaticResource Glyph}" Text="&#xE718;" />
+                </ToggleButton>
+                <Button x:Name="SettingsButton" Style="{StaticResource IconButton}" Click="Settings_Click"
+                        ToolTip="Settings" AutomationProperties.Name="Settings">
+                    <TextBlock Style="{StaticResource Glyph}" Text="&#xE713;" />
+                </Button>
+                <Rectangle Width="1" Height="20" Fill="{DynamicResource LineBrush}" Margin="6,0" />
+                <Button Style="{StaticResource IconButton}" Click="Minimize_Click" ToolTip="Minimize" AutomationProperties.Name="Minimize">
+                    <TextBlock Style="{StaticResource Glyph}" Text="&#xE921;" />
+                </Button>
+                <Button x:Name="MaximizeButton" Style="{StaticResource IconButton}" Click="Maximize_Click" ToolTip="Maximize" AutomationProperties.Name="Maximize">
+                    <TextBlock x:Name="MaximizeGlyph" Style="{StaticResource Glyph}" Text="&#xE922;" />
+                </Button>
+                <Button Style="{StaticResource CloseButton}" Click="Close_Click" ToolTip="Close" AutomationProperties.Name="Close">
+                    <TextBlock Style="{StaticResource Glyph}" Text="&#xE8BB;" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- ===== Monitor view ===== -->
+        <Grid x:Name="MonitorView" Grid.Row="1" Margin="24,6,24,14"
+              Visibility="{Binding IsMonitorView, Converter={StaticResource B2V}}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="1.05*" MinWidth="320" />
+            </Grid.ColumnDefinitions>
+
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="THERMALSCOPE"
-                                   Foreground="#F3F6FF"
-                                   FontSize="20"
-                                   FontWeight="Bold" />
-                        <TextBlock Text="CPU + GPU hardware telemetry"
-                                   Foreground="#7E8BA5"
-                                   FontSize="11"
-                                   Margin="0,3,0,0" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Border Background="#122B2B"
-                                BorderBrush="#1D5B55"
-                                BorderThickness="1"
-                                CornerRadius="8"
-                                Padding="10,6"
-                                Margin="0,0,12,0">
-                            <StackPanel Orientation="Horizontal">
-                                <Ellipse x:Name="LiveDot"
-                                         Width="7"
-                                         Height="7"
-                                         Fill="#57D9A3"
-                                         Margin="0,0,7,0" />
-                                <TextBlock x:Name="HeaderStatusText"
-                                           Text="CONNECTING"
-                                           Foreground="#7EE5BB"
-                                           FontSize="10"
-                                           FontWeight="SemiBold" />
-                            </StackPanel>
-                        </Border>
-                        <Button x:Name="IntervalButton"
-                                Content="2 sec"
-                                Style="{StaticResource GhostButtonStyle}"
-                                Click="IntervalButton_Click"
-                                ToolTip="Change refresh interval" />
-                        <Button x:Name="RefreshButton"
-                                Content="↻  Refresh"
-                                Style="{StaticResource GhostButtonStyle}"
-                                Click="RefreshButton_Click"
-                                ToolTip="Refresh now" />
-                        <Button x:Name="MinimizeButton"
-                                Content="—"
-                                Style="{StaticResource WindowButtonStyle}"
-                                Click="MinimizeButton_Click"
-                                ToolTip="Minimize" />
-                        <Button x:Name="CloseButton"
-                                Content="×"
-                                Style="{StaticResource WindowButtonStyle}"
-                                Click="CloseButton_Click"
-                                ToolTip="Close" />
-                    </StackPanel>
-                </Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <ContentControl Content="{Binding Cpu}" ContentTemplate="{StaticResource ComponentCard}" VerticalAlignment="Top" />
+                    <ContentControl Grid.Column="2" Content="{Binding Gpu}" ContentTemplate="{StaticResource ComponentCard}" VerticalAlignment="Top" />
 
-                <ScrollViewer Grid.Row="1"
-                              VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled"
-                              Padding="0,0,0,0">
-                    <Grid Margin="26,3,26,24">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="1.55*" />
-                            <ColumnDefinition Width="20" />
-                            <ColumnDefinition Width="1*" />
-                        </Grid.ColumnDefinitions>
-
-                        <StackPanel Grid.Column="0">
-                            <Grid Margin="0,0,0,14">
+                    <c:Card Grid.Row="1" Grid.ColumnSpan="3" Margin="0,16,0,0" Padding="22,18">
+                        <StackPanel>
+                            <TextBlock Text="Thermal scale" Style="{StaticResource CardTitle}" />
+                            <TextBlock Text="CPU above, GPU below, both read against the same heat ramp." Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                            <c:ThermalRuler Height="84" Margin="0,6,0,2" CpuFraction="{Binding Cpu.Fraction}" GpuFraction="{Binding Gpu.Fraction}"
+                                            CpuText="{Binding Cpu.TempShort}" GpuText="{Binding Gpu.TempShort}"
+                                            LabelBrush="{DynamicResource FaintBrush}" AutomationProperties.Name="CPU and GPU temperature on the heat scale" />
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="24" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
                                 <StackPanel>
-                                    <TextBlock Text="OVERVIEW"
-                                               Style="{StaticResource MetricLabelStyle}" />
-                                    <TextBlock Text="Live component health"
-                                               Style="{StaticResource SectionTitleStyle}"
-                                               Margin="0,5,0,0" />
+                                    <TextBlock Text="CPU temperature, last few minutes" Style="{StaticResource Caption}" />
+                                    <c:Sparkline Height="68" Margin="0,6,0,0" Values="{Binding Cpu.TempSeries}" Minimum="20" Maximum="110"
+                                                 Stroke="{Binding Cpu.TempBrush}" GridBrush="{DynamicResource LineBrush}" />
                                 </StackPanel>
-                                <TextBlock x:Name="SummaryText"
-                                           Text="Waiting for hardware…"
-                                           Foreground="#8492AE"
-                                           FontSize="12"
-                                           VerticalAlignment="Bottom"
-                                           HorizontalAlignment="Right"
-                                           TextTrimming="CharacterEllipsis" />
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="GPU temperature, last few minutes" Style="{StaticResource Caption}" />
+                                    <c:Sparkline Height="68" Margin="0,6,0,0" Values="{Binding Gpu.TempSeries}" Minimum="20" Maximum="110"
+                                                 Stroke="{Binding Gpu.TempBrush}" GridBrush="{DynamicResource LineBrush}" />
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </c:Card>
+                </Grid>
+            </ScrollViewer>
+
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <c:Card Padding="0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid Margin="20,18,20,0">
+                            <TextBlock Text="Live sensors" Style="{StaticResource CardTitle}" />
+                            <TextBlock Text="{Binding SensorCountText}" Style="{StaticResource Caption}" HorizontalAlignment="Right" VerticalAlignment="Bottom" />
+                        </Grid>
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="20,12,20,10">
+                            <RadioButton x:Name="FilterAll" Content="All" Tag="All" GroupName="SensorFilter" Style="{StaticResource ChipRadio}" Click="SensorFilter_Click" Margin="0,0,6,0" />
+                            <RadioButton x:Name="FilterCpu" Content="CPU" Tag="CPU" GroupName="SensorFilter" Style="{StaticResource ChipRadio}" Click="SensorFilter_Click" Margin="0,0,6,0" />
+                            <RadioButton x:Name="FilterGpu" Content="GPU" Tag="GPU" GroupName="SensorFilter" Style="{StaticResource ChipRadio}" Click="SensorFilter_Click" Margin="0,0,6,0" />
+                            <RadioButton x:Name="FilterTemps" Content="Temperatures" Tag="Temps" GroupName="SensorFilter" Style="{StaticResource ChipRadio}" Click="SensorFilter_Click" />
+                        </StackPanel>
+                        <ListBox Grid.Row="2" Style="{StaticResource PlainListBox}" Margin="10,0,6,12"
+                                 ItemsSource="{Binding SensorsView}" ItemTemplate="{StaticResource SensorRow}"
+                                 AutomationProperties.Name="Live sensor readings" />
+                    </Grid>
+                </c:Card>
+
+                <c:Card Grid.Row="1" Padding="20,16" Margin="0,16,0,0">
+                    <StackPanel>
+                        <TextBlock Text="Sensor source" Style="{StaticResource CardTitle}" />
+                        <TextBlock Text="{Binding BackendText}" FontWeight="SemiBold" Margin="0,8,0,0" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding CoverageText}" Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding NoticeText}" Style="{StaticResource Caption}" Foreground="{DynamicResource WarnBrush}"
+                                   Margin="0,8,0,0" TextWrapping="Wrap" Visibility="{Binding HasNotice, Converter={StaticResource B2V}}" />
+                    </StackPanel>
+                </c:Card>
+            </Grid>
+        </Grid>
+
+        <!-- ===== Frame pacer view ===== -->
+        <ScrollViewer x:Name="PacerView" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Visibility="{Binding IsPacerView, Converter={StaticResource B2V}}">
+            <Grid Margin="24,6,24,14" DataContext="{Binding Pacer}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.8*" />
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="1*" MinWidth="300" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel>
+                    <!-- Limit -->
+                    <c:Card Padding="22,18">
+                        <StackPanel>
+                            <Grid>
+                                <TextBlock Text="Frame limit" Style="{StaticResource CardTitle}" />
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                    <TextBlock Text="Limiter" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                    <ToggleButton x:Name="LimiterSwitch" Style="{StaticResource SwitchToggle}" Click="LimiterSwitch_Click"
+                                                  IsChecked="{Binding LimiterEnabled, Mode=OneWay}"
+                                                  AutomationProperties.Name="Frame limiter on or off" ToolTip="Pause or resume the limiter" />
+                                </StackPanel>
                             </Grid>
 
-                            <Border Style="{StaticResource CardStyle}" Padding="22" Margin="0,0,0,16">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <Grid>
-                                        <StackPanel>
-                                            <TextBlock Text="CPU"
-                                                       Foreground="#8EA0FF"
-                                                       FontSize="11"
-                                                       FontWeight="Bold" />
-                                            <TextBlock x:Name="CpuNameText"
-                                                       Text="Detecting processor…"
-                                                       Foreground="#EDF2FF"
-                                                       FontSize="17"
-                                                       FontWeight="SemiBold"
-                                                       Margin="0,5,0,0"
-                                                       TextTrimming="CharacterEllipsis" />
-                                        </StackPanel>
-                                        <Border HorizontalAlignment="Right"
-                                                VerticalAlignment="Top"
-                                                Background="#172A36"
-                                                BorderBrush="#20504B"
-                                                BorderThickness="1"
-                                                CornerRadius="7"
-                                                Padding="9,5">
-                                            <TextBlock x:Name="CpuHealthText"
-                                                       Text="ONLINE"
-                                                       Foreground="#71DDB5"
-                                                       FontSize="10"
-                                                       FontWeight="SemiBold" />
-                                        </Border>
-                                    </Grid>
-                                    <Grid Grid.Row="1" Margin="0,22,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="28" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel>
-                                            <TextBlock Text="USAGE" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="CpuUsageText"
-                                                       Text="—"
-                                                       Style="{StaticResource MetricValueStyle}" />
-                                            <ProgressBar x:Name="CpuUsageBar"
-                                                         Height="7"
-                                                         Minimum="0"
-                                                         Maximum="100"
-                                                         Value="0"
-                                                         Foreground="#7C8CFF"
-                                                         Background="#1D2942"
-                                                         BorderThickness="0"
-                                                         Margin="0,10,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2">
-                                            <TextBlock Text="PACKAGE TEMP" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="CpuTempText"
-                                                       Text="—"
-                                                       Style="{StaticResource MetricValueStyle}" />
-                                            <TextBlock x:Name="CpuTempStateText"
-                                                       Text="WAITING"
-                                                       Foreground="#7E8BA5"
-                                                       FontSize="11"
-                                                       Margin="0,10,0,0" />
-                                        </StackPanel>
-                                    </Grid>
-                                    <Grid Grid.Row="2" Margin="0,20,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel>
-                                            <TextBlock Text="CLOCK" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="CpuClockText"
-                                                       Text="—"
-                                                       Foreground="#D7E0F2"
-                                                       FontSize="14"
-                                                       FontWeight="SemiBold"
-                                                       Margin="0,5,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1">
-                                            <TextBlock Text="POWER" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="CpuPowerText"
-                                                       Text="—"
-                                                       Foreground="#D7E0F2"
-                                                       FontSize="14"
-                                                       FontWeight="SemiBold"
-                                                       Margin="0,5,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2">
-                                            <TextBlock Text="TEMP SENSOR" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="CpuTempSourceText"
-                                                       Text="—"
-                                                       Foreground="#D7E0F2"
-                                                       FontSize="14"
-                                                       FontWeight="SemiBold"
-                                                       Margin="0,5,0,0"
-                                                       TextTrimming="CharacterEllipsis" />
-                                        </StackPanel>
-                                    </Grid>
-                                </Grid>
-                            </Border>
-
-                            <Border Style="{StaticResource CardStyle}" Padding="22">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <Grid>
-                                        <StackPanel>
-                                            <TextBlock Text="GPU"
-                                                       Foreground="#54D6C2"
-                                                       FontSize="11"
-                                                       FontWeight="Bold" />
-                                            <TextBlock x:Name="GpuNameText"
-                                                       Text="Detecting graphics adapter…"
-                                                       Foreground="#EDF2FF"
-                                                       FontSize="17"
-                                                       FontWeight="SemiBold"
-                                                       Margin="0,5,0,0"
-                                                       TextTrimming="CharacterEllipsis" />
-                                        </StackPanel>
-                                        <Border HorizontalAlignment="Right"
-                                                VerticalAlignment="Top"
-                                                Background="#172A36"
-                                                BorderBrush="#20504B"
-                                                BorderThickness="1"
-                                                CornerRadius="7"
-                                                Padding="9,5">
-                                            <TextBlock x:Name="GpuHealthText"
-                                                       Text="ONLINE"
-                                                       Foreground="#71DDB5"
-                                                       FontSize="10"
-                                                       FontWeight="SemiBold" />
-                                        </Border>
-                                    </Grid>
-                                    <Grid Grid.Row="1" Margin="0,22,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="28" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel>
-                                            <TextBlock Text="USAGE" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="GpuUsageText"
-                                                       Text="—"
-                                                       Style="{StaticResource MetricValueStyle}" />
-                                            <ProgressBar x:Name="GpuUsageBar"
-                                                         Height="7"
-                                                         Minimum="0"
-                                                         Maximum="100"
-                                                         Value="0"
-                                                         Foreground="#4CCFBE"
-                                                         Background="#1D2942"
-                                                         BorderThickness="0"
-                                                         Margin="0,10,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2">
-                                            <TextBlock Text="CORE TEMP" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="GpuTempText"
-                                                       Text="—"
-                                                       Style="{StaticResource MetricValueStyle}" />
-                                            <TextBlock x:Name="GpuTempStateText"
-                                                       Text="WAITING"
-                                                       Foreground="#7E8BA5"
-                                                       FontSize="11"
-                                                       Margin="0,10,0,0" />
-                                        </StackPanel>
-                                    </Grid>
-                                    <Grid Grid.Row="2" Margin="0,20,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel>
-                                            <TextBlock Text="CLOCK" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="GpuClockText"
-                                                       Text="—"
-                                                       Foreground="#D7E0F2"
-                                                       FontSize="14"
-                                                       FontWeight="SemiBold"
-                                                       Margin="0,5,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1">
-                                            <TextBlock Text="POWER" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="GpuPowerText"
-                                                       Text="—"
-                                                       Foreground="#D7E0F2"
-                                                       FontSize="14"
-                                                       FontWeight="SemiBold"
-                                                       Margin="0,5,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2">
-                                            <TextBlock Text="TEMP SENSOR" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="GpuTempSourceText"
-                                                       Text="—"
-                                                       Foreground="#D7E0F2"
-                                                       FontSize="14"
-                                                       FontWeight="SemiBold"
-                                                       Margin="0,5,0,0"
-                                                       TextTrimming="CharacterEllipsis" />
-                                        </StackPanel>
-                                    </Grid>
-                                </Grid>
-                            </Border>
-
-                            <Border Style="{StaticResource CardStyle}" Padding="22" Margin="0,16,0,0">
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
                                 <StackPanel>
-                                    <Grid>
-                                        <StackPanel>
-                                            <TextBlock Text="GAME FPS"
-                                                       Foreground="#F2B66D"
-                                                       FontSize="11"
-                                                       FontWeight="Bold" />
-                                            <TextBlock Text="Standalone DirectX monitor"
-                                                       Style="{StaticResource SectionTitleStyle}"
-                                                       Margin="0,5,0,0" />
-                                        </StackPanel>
-                                        <Border HorizontalAlignment="Right"
-                                                VerticalAlignment="Top"
-                                                Background="#172A36"
-                                                BorderBrush="#20504B"
-                                                BorderThickness="1"
-                                                CornerRadius="7"
-                                                Padding="9,5">
-                                            <TextBlock x:Name="FpsMonitorStatusText"
-                                                       Text="DX11/DX12: checking…"
-                                                       Foreground="#71DDB5"
-                                                       FontSize="10"
-                                                       FontWeight="SemiBold" />
-                                        </Border>
-                                    </Grid>
-                                    <TextBlock x:Name="GameStatusText"
-                                               Text="Select a game executable to monitor."
-                                               Foreground="#D7E0F2"
-                                               FontSize="12"
-                                               Margin="0,13,0,0"
-                                               TextWrapping="Wrap" />
-                                    <Grid Margin="0,15,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="145" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel>
-                                            <TextBlock Text="CURRENT FPS" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="GameCurrentFpsText"
-                                                       Text="—"
-                                                       Foreground="#54D6C2"
-                                                       FontSize="27"
-                                                       FontWeight="SemiBold"
-                                                       Margin="0,5,0,0" />
-                                            <TextBlock x:Name="GameMonitorStateText"
-                                                       Text="No game selected"
-                                                       Foreground="#72809B"
-                                                       FontSize="10"
-                                                       Margin="0,7,0,0"
-                                                       TextWrapping="Wrap" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1">
-                                            <TextBlock Text="PROCESS" Style="{StaticResource MetricLabelStyle}" />
-                                            <TextBlock x:Name="GameMonitorProcessText"
-                                                       Text="No game selected"
-                                                       Foreground="#D7E0F2"
-                                                       FontSize="13"
-                                                       FontWeight="SemiBold"
-                                                       Margin="0,7,0,0"
-                                                       TextWrapping="Wrap" />
-                                        </StackPanel>
-                                    </Grid>
-                                    <TextBlock Text="GAME EXECUTABLE"
-                                               Style="{StaticResource MetricLabelStyle}"
-                                               Margin="0,15,0,0" />
-                                    <TextBox x:Name="GameExecutableTextBox"
-                                             Style="{StaticResource DarkTextBox}"
-                                             Text=""
-                                             ToolTip="Example: Game.exe" />
-                                    <CheckBox x:Name="AutoMonitorCheckBox"
-                                              Content="Monitor automatically while the selected game is running"
-                                              Foreground="#9BA8C0"
-                                              FontSize="11"
-                                              IsChecked="True"
-                                              Margin="0,13,0,0" />
-                                    <Grid Margin="0,12,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="110" />
-                                        </Grid.ColumnDefinitions>
-                                        <Button x:Name="MonitorGameButton"
-                                                Content="Monitor FPS"
-                                                Style="{StaticResource GhostButtonStyle}"
-                                                Click="MonitorGameButton_Click"
-                                                Margin="0,0,8,0" />
-                                        <Button x:Name="StopGameMonitorButton"
-                                                Grid.Column="1"
-                                                Content="Stop"
-                                                Style="{StaticResource GhostButtonStyle}"
-                                                Click="StopGameMonitorButton_Click" />
-                                    </Grid>
-                                    <Grid Margin="0,16,0,7">
-                                        <TextBlock Text="VISIBLE PROCESSES"
-                                                   Style="{StaticResource MetricLabelStyle}" />
-                                        <TextBlock x:Name="GameProcessCountText"
-                                                   Text="0"
-                                                   Foreground="#7E8BA5"
-                                                   FontSize="10"
-                                                   HorizontalAlignment="Right" />
-                                    </Grid>
-                                    <ListBox x:Name="GameProcessesList"
-                                             Style="{StaticResource DarkListBox}"
-                                             ItemTemplate="{StaticResource GameProcessTemplate}"
-                                             Height="128"
-                                             SelectionChanged="GameProcessesList_SelectionChanged"
-                                             ScrollViewer.VerticalScrollBarVisibility="Auto" />
-                                    <TextBlock Text="Read-only FPS monitoring uses a DXGI hook. Anti-cheat protected games may block the attach; use only where permitted."
-                                               Foreground="#F2B66D"
-                                               FontSize="10"
-                                               Margin="0,9,0,0"
-                                               TextWrapping="Wrap" />
+                                    <TextBlock Style="{StaticResource Caption}">
+                                        <Run Text="Limiting" />
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding GameName}" Style="{StaticResource Metric}" FontSize="22" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
+                                    <TextBlock Text="{Binding DetectionText}" Style="{StaticResource Faint}" Margin="0,2,0,0" TextWrapping="Wrap" />
                                 </StackPanel>
-                            </Border>
-                        </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="AutoDetectButton" Content="Auto-detect" Style="{StaticResource GhostButton}" Click="AutoDetect_Click"
+                                            Margin="0,0,8,0" ToolTip="Go back to picking the game automatically" />
+                                    <ToggleButton x:Name="PickGameButton" Content="Choose game…" Style="{StaticResource ChipToggle}" Padding="14,8"
+                                                  MinHeight="36" AutomationProperties.Name="Choose the game to limit" />
+                                </StackPanel>
+                                <Popup x:Name="GamePopup" PlacementTarget="{Binding ElementName=PickGameButton}" Placement="Bottom"
+                                       HorizontalOffset="-190" VerticalOffset="6" StaysOpen="False" AllowsTransparency="True"
+                                       IsOpen="{Binding IsChecked, ElementName=PickGameButton, Mode=TwoWay}" PopupAnimation="Fade">
+                                    <c:Card Background="{DynamicResource PanelBrush}" Width="400" Height="330" Padding="10" Margin="12" LayoutTransform="{Binding LayoutTransform, ElementName=Root}">
+                                        <c:Card.Effect>
+                                            <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.5" Color="Black" />
+                                        </c:Card.Effect>
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="*" />
+                                            </Grid.RowDefinitions>
+                                            <Grid Margin="8,4,8,8">
+                                                <TextBlock Text="Pick the game window's program" Style="{StaticResource Caption}" />
+                                                <TextBlock Text="{Binding ProcessCountText}" Style="{StaticResource Faint}" HorizontalAlignment="Right" />
+                                            </Grid>
+                                            <ListBox x:Name="GameList" Grid.Row="1" Style="{StaticResource PlainListBox}"
+                                                     ItemsSource="{Binding Processes}" ItemTemplate="{StaticResource ProcessRow}"
+                                                     SelectionChanged="GameList_SelectionChanged" AutomationProperties.Name="Running programs" />
+                                        </Grid>
+                                    </c:Card>
+                                </Popup>
+                            </Grid>
 
-                        <StackPanel Grid.Column="2">
-                            <Border Style="{StaticResource CardStyle}" Padding="0" MinHeight="460">
+                            <Border Style="{StaticResource Banner}" Margin="0,14,0,0" Visibility="{Binding ConsentRequired, Converter={StaticResource B2V}}">
                                 <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="*" />
-                                    </Grid.RowDefinitions>
-                                    <Grid Margin="22,20,22,0">
-                                        <StackPanel>
-                                            <TextBlock Text="LIVE SENSORS"
-                                                       Foreground="#8EA0FF"
-                                                       FontSize="11"
-                                                       FontWeight="Bold" />
-                                            <TextBlock Text="CPU and GPU telemetry"
-                                                       Style="{StaticResource SectionTitleStyle}"
-                                                       Margin="0,5,0,0" />
-                                        </StackPanel>
-                                        <TextBlock x:Name="SensorCountText"
-                                                   Text="0 readings"
-                                                   Foreground="#7E8BA5"
-                                                   FontSize="11"
-                                                   HorizontalAlignment="Right"
-                                                   VerticalAlignment="Bottom" />
-                                    </Grid>
-                                    <Rectangle Grid.Row="1"
-                                               Height="1"
-                                               Fill="#202C45"
-                                               Margin="22,17,22,0" />
-                                    <ScrollViewer Grid.Row="2"
-                                                  Margin="22,16,8,20"
-                                                  VerticalScrollBarVisibility="Auto">
-                                        <ItemsControl x:Name="SensorItems"
-                                                      ItemTemplate="{StaticResource SensorRowTemplate}" />
-                                    </ScrollViewer>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,16,0"
+                                               Text="To pace frames, ThermalScope loads a small helper into the game process. It only reads frame timing and delays Present calls; it never edits game files. Do not use it with games that have anti-cheat." />
+                                    <Button Grid.Column="1" Content="Allow" Style="{StaticResource PrimaryButton}" Click="Consent_Click"
+                                            VerticalAlignment="Center" />
                                 </Grid>
                             </Border>
 
-                            <Border Style="{StaticResource CardStyle}" Padding="22" Margin="0,16,0,0">
-                                <StackPanel>
-                                    <TextBlock Text="SENSOR COVERAGE"
-                                               Foreground="#54D6C2"
-                                               FontSize="11"
-                                               FontWeight="Bold" />
-                                    <TextBlock x:Name="BackendText"
-                                               Text="Backend: starting…"
-                                               Foreground="#D7E0F2"
-                                               FontSize="13"
-                                               FontWeight="SemiBold"
-                                               Margin="0,12,0,0"
-                                               TextWrapping="Wrap" />
-                                    <TextBlock x:Name="CoverageText"
-                                               Text="Waiting for a sample…"
-                                               Style="{StaticResource MutedTextStyle}"
-                                               Margin="0,8,0,0"
-                                               TextWrapping="Wrap" />
-                                    <Border Background="#101A2C"
-                                            BorderBrush="#24314B"
-                                            BorderThickness="1"
-                                            CornerRadius="9"
-                                            Padding="11,9"
-                                            Margin="0,15,0,0">
-                                        <TextBlock x:Name="NoticeText"
-                                                   Text="Temperature access can require administrator privileges on some machines."
-                                                   Foreground="#8492AE"
-                                                   FontSize="11"
-                                                   TextWrapping="Wrap" />
-                                    </Border>
-                                    <Button x:Name="SetupButton"
-                                            Content="Set up CPU sensors"
-                                            Style="{StaticResource GhostButtonStyle}"
-                                            Click="SetupButton_Click"
-                                            Visibility="Collapsed"
-                                            HorizontalAlignment="Left"
-                                            Margin="0,12,0,0" />
-                                </StackPanel>
+                            <Border Style="{StaticResource Banner}" Margin="0,14,0,0" Visibility="{Binding HasError, Converter={StaticResource B2V}}">
+                                <TextBlock Text="{Binding ErrorText}" TextWrapping="Wrap" />
                             </Border>
 
-                        </StackPanel>
-                    </Grid>
-                </ScrollViewer>
+                            <TextBlock Text="Target frame rate" Style="{StaticResource Caption}" Margin="0,18,0,8" />
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="&#x2212;" Style="{StaticResource GhostButton}" Width="40" Padding="0" FontSize="18" Click="StepDown_Click"
+                                        ToolTip="Lower by 5" AutomationProperties.Name="Lower the limit by 5" />
+                                <TextBox x:Name="TargetBox" Style="{StaticResource FieldTextBox}" Width="104" Margin="8,0" MaxLength="3"
+                                         FontFamily="{DynamicResource DisplayFont}" FontSize="24" TextAlignment="Center" Padding="8,4"
+                                         Text="{Binding TargetInput, UpdateSourceTrigger=PropertyChanged}"
+                                         PreviewTextInput="TargetBox_PreviewTextInput" KeyDown="TargetBox_KeyDown"
+                                         GotKeyboardFocus="TargetBox_GotFocus" LostKeyboardFocus="TargetBox_LostFocus"
+                                         AutomationProperties.Name="Target frames per second" ToolTip="20 to 500, empty means no limit" />
+                                <Button Content="+" Style="{StaticResource GhostButton}" Width="40" Padding="0" FontSize="18" Click="StepUp_Click"
+                                        ToolTip="Raise by 5" AutomationProperties.Name="Raise the limit by 5" />
+                                <TextBlock Text="FPS" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="10,0,18,0" />
+                                <Button Content="Apply" Style="{StaticResource PrimaryButton}" MinWidth="92" Click="Apply_Click" />
+                            </StackPanel>
 
-                <Border Grid.Row="2"
-                        Background="#0D1424"
-                        BorderBrush="#202B43"
-                        BorderThickness="0,1,0,0">
-                    <Grid Margin="26,0,18,0">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <Ellipse x:Name="FooterDot"
-                                     Width="6"
-                                     Height="6"
-                                     Fill="#57D9A3"
-                                     Margin="0,0,8,0" />
-                            <TextBlock x:Name="StatusText"
-                                       Text="Starting monitor…"
-                                       Foreground="#9BA8C0"
-                                       FontSize="11" />
-                            <TextBlock x:Name="UpdatedText"
-                                       Text=""
-                                       Foreground="#5E6C87"
-                                       FontSize="11"
-                                       Margin="14,0,0,0" />
+                            <WrapPanel Margin="0,14,0,0">
+                                <Button Content="30" Tag="30" Style="{StaticResource GhostButton}" Click="Preset_Click" Padding="14,5" MinHeight="32" Margin="0,0,6,6" />
+                                <Button Content="40" Tag="40" Style="{StaticResource GhostButton}" Click="Preset_Click" Padding="14,5" MinHeight="32" Margin="0,0,6,6" />
+                                <Button Content="60" Tag="60" Style="{StaticResource GhostButton}" Click="Preset_Click" Padding="14,5" MinHeight="32" Margin="0,0,6,6" />
+                                <Button Content="90" Tag="90" Style="{StaticResource GhostButton}" Click="Preset_Click" Padding="14,5" MinHeight="32" Margin="0,0,6,6" />
+                                <Button Content="120" Tag="120" Style="{StaticResource GhostButton}" Click="Preset_Click" Padding="14,5" MinHeight="32" Margin="0,0,6,6" />
+                                <Button Content="144" Tag="144" Style="{StaticResource GhostButton}" Click="Preset_Click" Padding="14,5" MinHeight="32" Margin="0,0,6,6" />
+                                <Button Content="165" Tag="165" Style="{StaticResource GhostButton}" Click="Preset_Click" Padding="14,5" MinHeight="32" Margin="0,0,6,6" />
+                                <Button Content="240" Tag="240" Style="{StaticResource GhostButton}" Click="Preset_Click" Padding="14,5" MinHeight="32" Margin="0,0,6,6" />
+                                <Button Content="No limit" Tag="0" Style="{StaticResource GhostButton}" Click="Preset_Click" Padding="14,5" MinHeight="32" Margin="0,0,6,6" />
+                            </WrapPanel>
+
+                            <TextBlock Text="{Binding StatusText}" Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap" />
                         </StackPanel>
-                        <TextBlock x:Name="AdminHintText"
-                                   Text="Tip: run as administrator for full sensor access"
-                                   Foreground="#5E6C87"
-                                   FontSize="11"
-                                   HorizontalAlignment="Right"
-                                   VerticalAlignment="Center" />
-                    </Grid>
-                </Border>
+                    </c:Card>
+
+                    <!-- Live -->
+                    <c:Card Padding="22,18" Margin="0,16,0,0">
+                        <StackPanel>
+                            <Grid>
+                                <TextBlock Text="Live frame timing" Style="{StaticResource CardTitle}" />
+                                <Border HorizontalAlignment="Right" CornerRadius="12" Padding="10,4" Background="{DynamicResource RaisedBrush}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Ellipse Width="8" Height="8" Fill="{Binding StabilityBrush}" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding StabilityText}" Foreground="{Binding StabilityBrush}" FontWeight="SemiBold"
+                                                   FontSize="12" Margin="7,0,0,0" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+
+                            <Grid Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                                    <TextBlock Text="{Binding FpsText}" Style="{StaticResource BigNumber}" />
+                                    <TextBlock Text="FPS" Style="{StaticResource Caption}" Margin="8,0,0,10" VerticalAlignment="Bottom" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
+                                    <StackPanel Margin="0,0,28,0">
+                                        <TextBlock Text="Frame time" Style="{StaticResource Caption}" />
+                                        <TextBlock Text="{Binding FrameTimeText}" Style="{StaticResource Metric}" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,28,0">
+                                        <TextBlock Text="Slowest frame" Style="{StaticResource Caption}" ToolTip="FPS of the slowest frame in the last half second" />
+                                        <TextBlock Text="{Binding LowText}" Style="{StaticResource Metric}" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="Limit" Style="{StaticResource Caption}" />
+                                        <TextBlock Text="{Binding LimitSummary}" Style="{StaticResource Metric}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid Height="150" Margin="0,14,0,0">
+                                <c:Sparkline Values="{Binding FrameSeries}" Minimum="0" Maximum="{Binding GraphMax}"
+                                             Stroke="{Binding StabilityBrush}" StrokeThickness="1.5" ReferenceValue="{Binding ReferenceMs}"
+                                             ReferenceBrush="{DynamicResource FaintBrush}" GridBrush="{DynamicResource LineBrush}"
+                                             AutomationProperties.Name="Frame time graph" />
+                                <TextBlock Text="Frame times appear here while a game is being paced." Style="{StaticResource Faint}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="{Binding NoGraph, Converter={StaticResource B2V}}" />
+                            </Grid>
+                            <TextBlock Style="{StaticResource Faint}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="Last 240 frames. A flat line means even pacing; the dashed line is the target frame time." />
+                        </StackPanel>
+                    </c:Card>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2">
+                    <c:Card Padding="20,18">
+                        <StackPanel>
+                            <TextBlock Text="Cooler while limited" Style="{StaticResource CardTitle}" />
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,4,0,12"
+                                       Text="A lower frame target means less GPU work, so temperatures, power and fan noise drop." />
+                            <Grid DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="CPU" Style="{StaticResource Caption}" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Cpu.TempValue}" Foreground="{Binding Cpu.TempBrush}" Style="{StaticResource Metric}" FontSize="28" />
+                                        <TextBlock Text="{Binding Cpu.TempUnit}" Style="{StaticResource Caption}" Margin="2,8,0,0" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Cpu.PowerText}" Style="{StaticResource Faint}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="GPU" Style="{StaticResource Caption}" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding Gpu.TempValue}" Foreground="{Binding Gpu.TempBrush}" Style="{StaticResource Metric}" FontSize="28" />
+                                        <TextBlock Text="{Binding Gpu.TempUnit}" Style="{StaticResource Caption}" Margin="2,8,0,0" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Gpu.PowerText}" Style="{StaticResource Faint}" />
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </c:Card>
+
+                    <c:Card Padding="20,18" Margin="0,16,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Setting it up" Style="{StaticResource CardTitle}" />
+                            <TextBlock FontWeight="SemiBold" Margin="0,10,0,0" Text="Fixed refresh rate display" />
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                       Text="Set the limit, turn on V-Sync in the game, and keep the limit at or below your refresh rate." />
+                            <TextBlock FontWeight="SemiBold" Margin="0,10,0,0" Text="G-Sync or FreeSync display" />
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                       Text="Set the limit a few FPS under the refresh rate and use variable refresh instead of V-Sync." />
+                            <TextBlock FontWeight="SemiBold" Margin="0,10,0,0" Text="Pick a rate your PC can hold" />
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                       Text="If the graph spikes, lower the target or the in-game settings. Turn off other limiters so they do not fight. 40 FPS on a 120 Hz display is a good balance." />
+                        </StackPanel>
+                    </c:Card>
+
+                    <c:Card Padding="20,18" Margin="0,16,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Hotkeys" Style="{StaticResource CardTitle}" />
+                            <TextBlock Text="{Binding HotkeyText}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,8,0,0" LineHeight="20" />
+                        </StackPanel>
+                    </c:Card>
+
+                    <c:Card Padding="20,18" Margin="0,16,0,0">
+                        <StackPanel>
+                            <TextBlock Text="What works" Style="{StaticResource CardTitle}" />
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,8,0,0" LineHeight="20"
+                                       Text="64-bit DirectX 10, 11 and 12 games in borderless fullscreen, from Steam, other stores or a plain executable. Games with anti-cheat (Easy Anti-Cheat, BattlEye, Vanguard) are skipped on purpose. Vulkan, OpenGL, DirectX 9 and 32-bit games are not supported yet." />
+                        </StackPanel>
+                    </c:Card>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+
+        <!-- ===== Footer ===== -->
+        <Border Grid.Row="2" BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,1,0,0" Background="{DynamicResource PanelBrush}">
+            <Grid Margin="24,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse Width="7" Height="7" Fill="{Binding LiveBrush}" Margin="0,0,8,0" />
+                    <TextBlock Text="{Binding StatusText}" Style="{StaticResource Caption}" />
+                    <TextBlock Text="{Binding UpdatedText}" Style="{StaticResource Faint}" Margin="14,0,0,0" />
+                </StackPanel>
+                <TextBlock x:Name="ElevationText" Style="{StaticResource Faint}" HorizontalAlignment="Right" VerticalAlignment="Center" />
             </Grid>
         </Border>
-    </Border>
+
+        <!-- ===== Settings ===== -->
+        <Popup x:Name="SettingsPopup" PlacementTarget="{Binding ElementName=SettingsButton}" Placement="Bottom" HorizontalOffset="-360"
+               VerticalOffset="6" StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade" Closed="SettingsPopup_Closed">
+            <c:Card Background="{DynamicResource PanelBrush}" Width="430" Padding="0" Margin="12" LayoutTransform="{Binding LayoutTransform, ElementName=Root}">
+                <c:Card.Effect>
+                    <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.5" Color="Black" />
+                </c:Card.Effect>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Margin="22,18,22,10">
+                        <TextBlock Text="Settings" Style="{StaticResource CardTitle}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <RadioButton x:Name="TabLook" Content="Look" Tag="Look" GroupName="SettingsTab" IsChecked="True" Style="{StaticResource ChipRadio}" Click="SettingsTab_Click" Margin="0,0,6,0" />
+                            <RadioButton x:Name="TabGeneral" Content="General" Tag="General" GroupName="SettingsTab" Style="{StaticResource ChipRadio}" Click="SettingsTab_Click" Margin="0,0,6,0" />
+                            <RadioButton x:Name="TabHotkeys" Content="Hotkeys" Tag="Hotkeys" GroupName="SettingsTab" Style="{StaticResource ChipRadio}" Click="SettingsTab_Click" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Row="1" MaxHeight="520" VerticalScrollBarVisibility="Auto">
+                        <Grid Margin="22,0,22,20">
+                            <!-- Look -->
+                            <StackPanel x:Name="LookPanel">
+                                <TextBlock Text="Style" Style="{StaticResource Caption}" Margin="0,4,0,6" />
+                                <WrapPanel x:Name="LookChips">
+                                    <RadioButton Content="Scope" Tag="Scope" GroupName="Look" Style="{StaticResource ChipRadio}" Click="Look_Click" Margin="0,0,6,6" />
+                                    <RadioButton Content="Glass" Tag="Glass" GroupName="Look" Style="{StaticResource ChipRadio}" Click="Look_Click" Margin="0,0,6,6" />
+                                    <RadioButton Content="Depth" Tag="Depth" GroupName="Look" Style="{StaticResource ChipRadio}" Click="Look_Click" Margin="0,0,6,6" />
+                                    <RadioButton Content="Flat" Tag="Flat" GroupName="Look" Style="{StaticResource ChipRadio}" Click="Look_Click" Margin="0,0,6,6" />
+                                </WrapPanel>
+                                <TextBlock x:Name="LookDescription" Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,0,0,6" />
+
+                                <TextBlock Text="Appearance" Style="{StaticResource Caption}" Margin="0,12,0,6" />
+                                <StackPanel x:Name="ThemeChips" Orientation="Horizontal">
+                                    <RadioButton Content="System" Tag="System" GroupName="Theme" Style="{StaticResource ChipRadio}" Click="Theme_Click" Margin="0,0,6,0" />
+                                    <RadioButton Content="Dark" Tag="Dark" GroupName="Theme" Style="{StaticResource ChipRadio}" Click="Theme_Click" Margin="0,0,6,0" />
+                                    <RadioButton Content="Light" Tag="Light" GroupName="Theme" Style="{StaticResource ChipRadio}" Click="Theme_Click" />
+                                </StackPanel>
+
+                                <TextBlock Text="Accent colour" Style="{StaticResource Caption}" Margin="0,16,0,6" />
+                                <StackPanel x:Name="AccentChips" Orientation="Horizontal">
+                                    <RadioButton Tag="Teal" Background="#3DD6C6" ToolTip="Teal" GroupName="Accent" Style="{StaticResource SwatchRadio}" Click="Accent_Click" AutomationProperties.Name="Teal accent" />
+                                    <RadioButton Tag="Ember" Background="#FF8A3D" ToolTip="Ember" GroupName="Accent" Style="{StaticResource SwatchRadio}" Click="Accent_Click" AutomationProperties.Name="Ember accent" />
+                                    <RadioButton Tag="Violet" Background="#A78BFA" ToolTip="Violet" GroupName="Accent" Style="{StaticResource SwatchRadio}" Click="Accent_Click" AutomationProperties.Name="Violet accent" />
+                                    <RadioButton Tag="Lime" Background="#B8F04A" ToolTip="Lime" GroupName="Accent" Style="{StaticResource SwatchRadio}" Click="Accent_Click" AutomationProperties.Name="Lime accent" />
+                                    <RadioButton Tag="Ice" Background="#6CB8FF" ToolTip="Ice" GroupName="Accent" Style="{StaticResource SwatchRadio}" Click="Accent_Click" AutomationProperties.Name="Ice accent" />
+                                    <RadioButton Tag="Mono" Background="#C9D1DC" ToolTip="Mono" GroupName="Accent" Style="{StaticResource SwatchRadio}" Click="Accent_Click" AutomationProperties.Name="Mono accent" />
+                                </StackPanel>
+
+                                <TextBlock Text="Temperature dial" Style="{StaticResource Caption}" Margin="0,16,0,6" />
+                                <StackPanel x:Name="GaugeChips" Orientation="Horizontal">
+                                    <RadioButton Content="Heat ramp" Tag="Ramp" GroupName="Gauge" Style="{StaticResource ChipRadio}" Click="Gauge_Click" Margin="0,0,6,0" />
+                                    <RadioButton Content="Zones" Tag="Zones" GroupName="Gauge" Style="{StaticResource ChipRadio}" Click="Gauge_Click" Margin="0,0,6,0" />
+                                    <RadioButton Content="Minimal" Tag="Minimal" GroupName="Gauge" Style="{StaticResource ChipRadio}" Click="Gauge_Click" />
+                                </StackPanel>
+
+                                <TextBlock Text="Interface size" Style="{StaticResource Caption}" Margin="0,16,0,6" />
+                                <WrapPanel x:Name="ScaleChips">
+                                    <RadioButton Content="Auto" Tag="Auto" GroupName="Scale" Style="{StaticResource ChipRadio}" Click="Scale_Click" Margin="0,0,6,6" ToolTip="Scales with the window" />
+                                    <RadioButton Content="90%" Tag="90%" GroupName="Scale" Style="{StaticResource ChipRadio}" Click="Scale_Click" Margin="0,0,6,6" />
+                                    <RadioButton Content="100%" Tag="100%" GroupName="Scale" Style="{StaticResource ChipRadio}" Click="Scale_Click" Margin="0,0,6,6" />
+                                    <RadioButton Content="115%" Tag="115%" GroupName="Scale" Style="{StaticResource ChipRadio}" Click="Scale_Click" Margin="0,0,6,6" />
+                                    <RadioButton Content="130%" Tag="130%" GroupName="Scale" Style="{StaticResource ChipRadio}" Click="Scale_Click" Margin="0,0,6,6" />
+                                    <RadioButton Content="150%" Tag="150%" GroupName="Scale" Style="{StaticResource ChipRadio}" Click="Scale_Click" Margin="0,0,6,6" />
+                                </WrapPanel>
+                            </StackPanel>
+
+                            <!-- General -->
+                            <StackPanel x:Name="GeneralPanel" Visibility="Collapsed">
+                                <TextBlock Text="Temperature unit" Style="{StaticResource Caption}" Margin="0,4,0,6" />
+                                <StackPanel x:Name="UnitChips" Orientation="Horizontal">
+                                    <RadioButton Content="°C" Tag="C" GroupName="Unit" Style="{StaticResource ChipRadio}" Click="Unit_Click" Margin="0,0,6,0" />
+                                    <RadioButton Content="°F" Tag="F" GroupName="Unit" Style="{StaticResource ChipRadio}" Click="Unit_Click" />
+                                </StackPanel>
+
+                                <TextBlock Text="Sensor refresh" Style="{StaticResource Caption}" Margin="0,16,0,6" />
+                                <StackPanel x:Name="IntervalChips" Orientation="Horizontal">
+                                    <RadioButton Content="1 s" Tag="1" GroupName="Interval" Style="{StaticResource ChipRadio}" Click="Interval_Click" Margin="0,0,6,0" />
+                                    <RadioButton Content="2 s" Tag="2" GroupName="Interval" Style="{StaticResource ChipRadio}" Click="Interval_Click" Margin="0,0,6,0" />
+                                    <RadioButton Content="5 s" Tag="5" GroupName="Interval" Style="{StaticResource ChipRadio}" Click="Interval_Click" Margin="0,0,6,0" />
+                                    <RadioButton Content="10 s" Tag="10" GroupName="Interval" Style="{StaticResource ChipRadio}" Click="Interval_Click" />
+                                </StackPanel>
+
+                                <Rectangle Height="1" Fill="{DynamicResource LineBrush}" Margin="0,18,0,6" />
+
+                                <Grid Margin="0,8,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="Start with Windows" FontWeight="SemiBold" />
+                                        <TextBlock Text="Launches quietly into the tray." Style="{StaticResource Faint}" />
+                                    </StackPanel>
+                                    <ToggleButton x:Name="StartupSwitch" Style="{StaticResource SwitchToggle}" HorizontalAlignment="Right" Click="StartupSwitch_Click" AutomationProperties.Name="Start with Windows" />
+                                </Grid>
+                                <Grid Margin="0,12,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="Close button keeps running" FontWeight="SemiBold" />
+                                        <TextBlock Text="Hides to the tray so the limiter stays active." Style="{StaticResource Faint}" />
+                                    </StackPanel>
+                                    <ToggleButton x:Name="TraySwitch" Style="{StaticResource SwitchToggle}" HorizontalAlignment="Right" Click="TraySwitch_Click" AutomationProperties.Name="Close to tray" />
+                                </Grid>
+                                <Grid Margin="0,12,0,0">
+                                    <StackPanel HorizontalAlignment="Left">
+                                        <TextBlock Text="In-game overlay" FontWeight="SemiBold" />
+                                        <TextBlock Text="FPS, frame line, CPU and GPU strip over the game." Style="{StaticResource Faint}" TextWrapping="Wrap" MaxWidth="260" />
+                                    </StackPanel>
+                                    <ToggleButton x:Name="OverlaySwitch" Style="{StaticResource SwitchToggle}" HorizontalAlignment="Right" Click="OverlaySwitch_Click" AutomationProperties.Name="In-game overlay" />
+                                </Grid>
+                                <TextBlock Text="Overlay size" Style="{StaticResource Caption}" Margin="0,16,0,6" />
+                                <WrapPanel x:Name="OverlayScaleChips">
+                                    <RadioButton Content="Auto" Tag="Auto" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" ToolTip="Scales with the game window" />
+                                    <RadioButton Content="80%" Tag="80%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
+                                    <RadioButton Content="100%" Tag="100%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
+                                    <RadioButton Content="130%" Tag="130%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
+                                    <RadioButton Content="170%" Tag="170%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
+                                </WrapPanel>
+
+                                <Rectangle Height="1" Fill="{DynamicResource LineBrush}" Margin="0,18,0,6" />
+                                <TextBlock Text="Updates" Style="{StaticResource Caption}" Margin="0,8,0,6" />
+                                <TextBlock x:Name="UpdateStatus" Style="{StaticResource Faint}" TextWrapping="Wrap" />
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="CheckUpdatesButton" Content="Check now" Style="{StaticResource GhostButton}" Click="CheckUpdates_Click" Margin="0,0,8,0" />
+                                    <Button x:Name="InstallUpdateButton" Content="Install update" Style="{StaticResource PrimaryButton}" Click="InstallUpdate_Click" Visibility="Collapsed" />
+                                </StackPanel>
+                                <Grid Margin="0,14,0,0">
+                                    <TextBlock Text="Check automatically" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    <ToggleButton x:Name="AutoUpdateSwitch" Style="{StaticResource SwitchToggle}" HorizontalAlignment="Right" Click="AutoUpdateSwitch_Click" AutomationProperties.Name="Check for updates automatically" />
+                                </Grid>
+                            </StackPanel>
+
+                            <!-- Hotkeys -->
+                            <StackPanel x:Name="HotkeysPanel" Visibility="Collapsed">
+                                <TextBlock Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,4,0,10"
+                                           Text="Click a shortcut, then press the new keys. Esc cancels, Backspace clears. Shortcuts need Ctrl, Alt or Shift and work while a game has focus." />
+                                <StackPanel x:Name="HotkeyRows" />
+                                <TextBlock x:Name="HotkeyStatus" Style="{StaticResource Caption}" Foreground="{DynamicResource WarnBrush}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                <Button Content="Reset to defaults" Style="{StaticResource GhostButton}" HorizontalAlignment="Left" Margin="0,12,0,0" Click="HotkeyReset_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </ScrollViewer>
+                </Grid>
+            </c:Card>
+        </Popup>
+    </Grid>
 </Window>

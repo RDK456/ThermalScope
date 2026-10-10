@@ -1,100 +1,124 @@
 # ThermalScope
 
-ThermalScope is a native Windows desktop dashboard for watching CPU and GPU activity in real time. It shows:
+A Windows desktop app that does two jobs in one window:
 
-- CPU and GPU utilization
-- CPU package and GPU core temperatures when the hardware exposes them
-- CPU/GPU clocks and power when reported by the sensor driver
-- A live list of detected temperature, load, clock, and power sensors, including unavailable readings
-- Game process monitoring with a built-in DirectX 11/12 FPS readout
-- Adjustable refresh intervals and a manual refresh action
+- **Monitor** – CPU and GPU temperature, load, clock and power, shown on heat-ramp dials with a thermal scale, history and a live sensor list.
+- **Frame pacer** – limits a game's frame rate with evenly spaced frames, with a live FPS / frame-time readout, a frame-time graph, per-game memory, hotkeys, a tray icon and an in-game overlay. (Inspired by the idea behind [framepacer](https://framepacer.com/); this is an independent implementation.)
 
-The app uses [LibreHardwareMonitorLib](https://www.nuget.org/packages/LibreHardwareMonitorLib/) for hardware sensor access and Windows performance counters as a usage fallback. LibreHardwareMonitorLib is MPL-2.0 licensed; review its license and the transitive package notices before redistributing a packaged build.
+It is self-contained: nothing here needs MSI Afterburner, RTSS or any other tool.
 
 ## Requirements
 
-- Windows 10 or Windows 11
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) for building from source
-- Administrator access is required for the built-in FPS monitor and recommended for complete sensor coverage
-- A 64-bit DirectX 11/12 game for the built-in FPS monitor
+- Windows 10 or 11 (Windows 11 22H2+ for the Glass look's acrylic backdrop)
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) to build from source
+- No administrator rights are needed to start the app
+
+## Install
+
+Download `ThermalScope-Setup-<version>.exe` from the [latest release](https://github.com/RDK456/ThermalScope/releases/latest) and run it. It installs per user to `%LOCALAPPDATA%\Programs\ThermalScope` (no administrator rights), adds a Start menu shortcut and an entry in *Apps > Installed apps*, and starts the app. The installer is unsigned, so Windows SmartScreen may ask you to confirm. Prefer no installer? Unzip `ThermalScope-<version>-win-x64.zip` anywhere.
+
+### Updates
+
+The app checks GitHub Releases at start (at most every 12 hours; switch off in Settings > General) and shows an **Update** button when a newer version exists. If the release carries a *delta* package for your exact version, only the changed files are downloaded (typically under 1 MB instead of ~68 MB); otherwise the full package is. The download is verified against the release's `SHA256SUMS.txt`, the app exits, `apply-update.ps1` swaps the files (backing them up and rolling back on any failure), and ThermalScope restarts. Copies that were not installed with Setup open the release page instead.
+
+### Uninstall
+
+*Apps > Installed apps > ThermalScope*, or run `uninstall.ps1` from the install folder (`-RemoveSettings` also deletes your settings).
+
+### Releasing (maintainers)
+
+```powershell
+# bump <Version> in ThermalScope.csproj, then:
+gh release download v1.1.0 --pattern manifest-1.1.0.json     # previous release's manifest
+.\tools\release.ps1 -PreviousManifest .\manifest-1.1.0.json   # builds dist\ incl. the delta
+gh release create v1.2.0 dist\* --title "ThermalScope 1.2.0" --notes-file notes.md
+```
+
+`dist\` gets the full zip, the delta zip, `ThermalScope-Setup-<v>.exe`, `manifest-<v>.json` (needed to build the *next* delta) and `SHA256SUMS.txt`. Upload all of them.
 
 ## Run
-
-From PowerShell in this folder:
 
 ```powershell
 .\run.ps1
 ```
 
-Or build and run directly:
+or `dotnet run --project .\ThermalScope.csproj`. For a self-contained build:
 
 ```powershell
-dotnet restore
-dotnet run --project .\ThermalScope.csproj
-```
-
-To start with elevated sensor access:
-
-```powershell
-.\run-elevated.ps1
-```
-
-If CPU temperature sensors are detected but show `—`, install the official PawnIO driver and then restart the app:
-
-```powershell
-.\install-pawnio.ps1
-```
-
-On the first launch, ThermalScope detects missing PawnIO and asks once whether to open the official installer. It does not silently install a kernel driver: Windows shows its normal administrator/UAC confirmation. You can also retry from the **Set up CPU sensors** button in the app.
-
-The app now keeps detected-but-unavailable CPU sensors in the live sensor list, so you can see whether the CPU exposes package/core/clock/power sensors even when the driver cannot read their values.
-
-For a self-contained x64 build (no .NET runtime required on the target machine):
-
-```powershell
-dotnet restore .\ThermalScope.csproj -r win-x64
 dotnet publish .\ThermalScope.csproj -c Release -r win-x64 --self-contained true -o .\publish
 ```
 
-For one self-contained executable:
+## CPU temperature, honestly
+
+Windows has no driver-free API for the CPU **die** temperature. The only thing it exposes without a driver is an ACPI thermal zone, which on a desktop is a motherboard/ambient reading, so ThermalScope never shows it as the CPU temperature. What the app does:
+
+| Source | Needs | What you get |
+| --- | --- | --- |
+| Windows counters (always) | nothing | CPU load, **clock** (Processor Performance x base frequency) and **package power** (RAPL "Energy Meter", where the platform exposes it) |
+| [PawnIO](https://github.com/namazso/PawnIO.Setup) driver + LibreHardwareMonitor | one-time install (button in the CPU card), then run as administrator | real CPU die/package/core temperatures |
+| MSI Afterburner running (optional) | Afterburner | its CPU die temperature, read from `MAHMSharedMemory` |
+| none of the above | – | the CPU card says so and shows what to do; GPU temperature, load, clock and power still work |
+
+GPU values come from the graphics driver (NVIDIA/AMD/Intel) through LibreHardwareMonitor and need no extra driver.
+
+## Frame pacer
+
+1. Start a game in **borderless fullscreen**. ThermalScope detects it (foreground, fills its monitor, loads Direct3D) or choose it yourself with **Choose game…**.
+2. Allow the one-time prompt to attach the helper.
+3. Pick a target (presets, +/-, or type a number and press Apply). Changes apply to the running game immediately and are remembered per game.
+
+The helper (`native/ThermalScopeHook.dll`) hooks DXGI `Present`, waits before each present so frames arrive at an even cadence (high-resolution timer plus a short spin), and publishes FPS, frame time and a 240-frame ring through shared memory.
+
+Supported: 64-bit DirectX 10/11/12 games. Not supported: Vulkan, OpenGL, DirectX 9/8, 32-bit games, NVIDIA Reflex/DLSS frame-generation limiting. Games protected by Easy Anti-Cheat, BattlEye, Vanguard and similar are skipped on purpose; use the Xbox Game Bar counter there. Setup tips are in the app (fixed refresh: V-Sync on; G-Sync/FreeSync: limit a few FPS under the refresh rate).
+
+### Overlay
+
+A rounded, click-through strip at the top centre **inside the game window**: FPS with the low/high range, a frame-time line, and CPU/GPU load and temperature. It follows the window if the game moves or resizes, scales with the game window (Auto) or at a fixed 80-170%, never grows wider than the window, and only shows while the game is in front. Toggle it in Settings or with its hotkey. Exclusive-fullscreen games hide any window-based overlay.
+
+### Hotkeys
+
+System-wide, configurable in **Settings > Hotkeys** (click a shortcut, press the new keys; Esc cancels, Backspace clears; a modifier is required; clashes are reported). Defaults: Ctrl+Alt+F10 pause/resume limiter, Ctrl+Alt+PgUp / PgDn limit +/-5, Ctrl+Alt+T open the window, Ctrl+Alt+O overlay.
+
+### Tray and startup
+
+Close-to-tray and Start with Windows (silent, into the tray) are in Settings > General.
+
+## Looks and scaling
+
+**Settings > Look** has independent choices:
+
+- **Style** – Scope (viewfinder corner marks, dot grid), Glass (acrylic backdrop), Depth (raised panels, soft shadows), Flat.
+- **Appearance** – System, Dark, Light.
+- **Accent colour** – six accents (temperature colours always keep their meaning).
+- **Temperature dial** – Heat ramp, Zones, Minimal.
+- **Interface size** – Auto (scales with the window, from small windows to 4K) or fixed 90-150%.
+
+Not included yet: translation to other languages.
+
+## Safety notes
+
+- The helper is only loaded into a process you chose, after a one-time consent, and never into Windows system processes or anti-cheat protected games.
+- The helper DLL is extracted to a hash-named file (an admin-only-writable folder when elevated) and re-verified by SHA-256 while locked at injection time.
+- The PawnIO setup script is passed to an elevated PowerShell on the command line (no temp file to swap) and its download is pinned by SHA-256.
+
+## Build the native helper
 
 ```powershell
-dotnet publish .\ThermalScope.csproj -c Release -r win-x64 --self-contained true -o .\publish-single -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true
+.\native\build-native.ps1
 ```
 
-## Notes
-
-Temperature availability is hardware- and driver-dependent. A value shown as `—` means that Windows or the sensor driver did not report a usable reading; it does not mean the component is at zero degrees. Some laptop and desktop GPUs expose temperature only through vendor-specific drivers.
-
-LibreHardwareMonitor 0.9.6 uses the PawnIO kernel driver for some motherboard and CPU sensors. The NuGet library does not install that driver automatically. If ThermalScope reports that PawnIO is unavailable, install it from the [official PawnIO releases](https://github.com/namazso/PawnIO.Setup/releases), then restart ThermalScope. Do not disable antivirus protection or install unsigned drivers.
-
-The first sample can take a moment while hardware providers are initialized. The refresh interval cycles through 1, 2, 5, and 10 seconds.
-
-## Game FPS control
-
-The **Game FPS** card below the GPU card watches visible Windows processes and displays the current frame rate for the selected DirectX game.
-
-1. Select the actual rendering executable from **Visible processes** (not only a launcher), or type its executable name.
-2. Leave **Monitor automatically while the selected game is running** enabled.
-3. Click **Monitor FPS**.
-
-The monitor is built into ThermalScope and does not require RTSS or MSI Afterburner. It extracts a small native x64 helper, attaches it to the selected process, and observes the DXGI `Present` path for DirectX 11/12 without changing the game's frame rate. The monitor detaches when the game closes or ThermalScope exits, and the game process owns the helper until it exits.
-
-**Important:** this is an opt-in, read-only process attach for FPS monitoring. Run ThermalScope as administrator, and only use it with software where you are allowed to inject a helper. Anti-cheat protected games may block or terminate the operation; ThermalScope does not bypass anti-cheat. The first version supports 64-bit DirectX 11/12 processes only. Current FPS is reported when the game is rendering through the hooked swap chain; VSync and fullscreen optimizations can affect the observed value. The selected executable and auto-monitor preference are stored locally in `%LOCALAPPDATA%\ThermalScope\game-monitor.json`.
+Needs Visual Studio Build Tools with the C++ workload and the Windows SDK; MinHook 1.3.4 is cloned automatically. The rebuilt DLL is embedded in the next build.
 
 ## Project layout
 
-- `MainWindow.xaml` / `MainWindow.xaml.cs` — dashboard UI and live rendering
-- `Services/HardwareMonitorService.cs` — background polling, sensor selection, and Windows counter fallback
-- `Services/GameMonitorService.cs` — process monitoring and automatic FPS-monitor state
-- `Services/GameFpsMonitor.cs` — built-in shared-memory configuration and native helper lifecycle
-- `Services/NativeProcessInjector.cs` — opt-in x64 helper attachment
-- `native/ThermalScopeHook.cpp` — native DXGI Present/Present1 FPS hook implementation
-- `native/build-native.ps1` — optional native helper rebuild script
-- `native/ThermalScopeHook.dll` — checked-in x64 helper embedded into the executable
-- `native/MinHook-LICENSE.txt` — MinHook BSD-2-Clause notice
-- `Services/PawnIoSetupManager.cs` — one-time consent, official installer launch, and restart handling
-- `Models/MonitorSnapshot.cs` — immutable CPU/GPU data passed from the polling service to the UI
-- `Models/GameMonitorSnapshot.cs` — game process and FPS-monitor state passed to the UI
-- `install-pawnio.ps1` — optional official PawnIO setup for CPU sensor access
-- `app.manifest` — Windows compatibility and per-monitor DPI settings
+- `MainWindow.xaml(.cs)` – header, Monitor view, Frame pacer view, Settings
+- `OverlayWindow.xaml(.cs)` – in-game overlay
+- `ViewModels/` – display state (cards, sensors, pacer, heat colours)
+- `Controls/` – `ArcGauge`, `Sparkline`, `ThermalRuler`, `Card`
+- `Themes/Theme.xaml` – control styles; `Services/LookManager.cs` builds colours and looks at runtime
+- `Services/HardwareMonitorService.cs` – sensors and Windows-counter fallbacks; `AfterburnerReader.cs` optional source
+- `Services/GameMonitorService.cs`, `GameFpsMonitor.cs`, `GameDetector.cs`, `AntiCheatGuard.cs`, `HookFileStore.cs`, `NativeProcessInjector.cs`, `SecureSharedMemory.cs` – pacer plumbing
+- `Services/HotkeyManager.cs`, `TrayIcon.cs`, `StartupManager.cs`, `ThemeManager.cs`, `AppSettings.cs`
+- `native/` – the DXGI hook (`ThermalScopeHook.cpp`, built DLL, build script)
+
+Settings are stored in `%LOCALAPPDATA%\ThermalScope\` (`settings.json`, `game-monitor.json`, `thermal-scope.log`).

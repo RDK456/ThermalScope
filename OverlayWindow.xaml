@@ -1,0 +1,76 @@
+<Window x:Class="ThermalScope.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="clr-namespace:ThermalScope.Controls"
+        Title="ThermalScope overlay"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        Focusable="False"
+        IsHitTestVisible="False"
+        SizeToContent="WidthAndHeight"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display">
+    <Window.Resources>
+        <!-- The overlay is always dark, whatever theme the app uses: it has to read on top of any game. -->
+        <SolidColorBrush x:Key="OverlayText" Color="#F2F5F9" />
+        <SolidColorBrush x:Key="OverlayMuted" Color="#9AA5B4" />
+        <SolidColorBrush x:Key="OverlayLine" Color="#33FFFFFF" />
+        <Style x:Key="Label" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource OverlayMuted}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+        </Style>
+        <Style x:Key="Value" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource OverlayText}" />
+            <Setter Property="FontFamily" Value="{DynamicResource DisplayFont}" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="Divider" TargetType="Rectangle">
+            <Setter Property="Width" Value="1" />
+            <Setter Property="Height" Value="20" />
+            <Setter Property="Fill" Value="{StaticResource OverlayLine}" />
+            <Setter Property="Margin" Value="16,0" />
+        </Style>
+    </Window.Resources>
+
+    <Border x:Name="Pill" Margin="10" CornerRadius="22" Padding="20,9" Background="#E60C0E12" BorderBrush="#2EFFFFFF" BorderThickness="1"
+            HorizontalAlignment="Center">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <TextBlock Text="FPS" Style="{StaticResource Label}" />
+            <TextBlock Text="{Binding Pacer.FpsText}" Style="{StaticResource Value}" FontSize="24" MinWidth="34" />
+            <TextBlock Text="{Binding Pacer.RangeText}" Foreground="{StaticResource OverlayMuted}" FontSize="13"
+                       VerticalAlignment="Center" Margin="10,0,0,0" />
+
+            <Rectangle Style="{StaticResource Divider}" />
+
+            <c:Sparkline Width="124" Height="26" VerticalAlignment="Center" Values="{Binding Pacer.FrameSeries}"
+                         Minimum="0" Maximum="{Binding Pacer.GraphMax}" Stroke="{Binding Pacer.OverlayStabilityBrush}"
+                         StrokeThickness="1.5" />
+
+            <Rectangle Style="{StaticResource Divider}" />
+
+            <TextBlock Text="CPU" Style="{StaticResource Label}" />
+            <TextBlock Text="{Binding Cpu.UsageText}" Style="{StaticResource Value}" />
+            <TextBlock Style="{StaticResource Value}" Margin="10,0,0,0" Foreground="{Binding Cpu.OverlayTempBrush}">
+                <Run Text="{Binding Cpu.TempValue, Mode=OneWay}" /><Run Text="{Binding Cpu.TempUnit, Mode=OneWay}" />
+            </TextBlock>
+
+            <Rectangle Style="{StaticResource Divider}" />
+
+            <TextBlock Text="GPU" Style="{StaticResource Label}" />
+            <TextBlock Text="{Binding Gpu.UsageText}" Style="{StaticResource Value}" />
+            <TextBlock Style="{StaticResource Value}" Margin="10,0,0,0" Foreground="{Binding Gpu.OverlayTempBrush}">
+                <Run Text="{Binding Gpu.TempValue, Mode=OneWay}" /><Run Text="{Binding Gpu.TempUnit, Mode=OneWay}" />
+            </TextBlock>
+        </StackPanel>
+    </Border>
+</Window>

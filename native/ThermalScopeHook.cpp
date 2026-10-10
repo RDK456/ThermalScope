@@ -14,20 +14,32 @@
 namespace
 {
 constexpr uint32_t ConfigMagic = 0x54494D31; // "1MIT" in little-endian byte order.
-constexpr uint32_t ConfigVersion = 1;
+constexpr uint32_t ConfigVersion = 3;
 constexpr wchar_t ConfigMappingName[] = L"Local\\ThermalScopeFpsConfig";
+constexpr double StaleSwapChainSeconds = 1.0;
+constexpr double PublishWindowSeconds = 0.5;
+constexpr uint32_t FrameRingSize = 240;
+constexpr uint32_t MinTargetFps = 10;
+constexpr uint32_t MaxTargetFps = 1000;
 
+// Layout must match GameFpsMonitor.cs (offsets in bytes).
 struct SharedConfig
 {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t controllerPid;
-    uint32_t targetPid;
-    uint32_t reservedFps;
-    uint32_t enabled;
-    uint32_t hookReady;
-    uint32_t currentFpsBits;
-    uint32_t reserved;
+    uint32_t magic;          // 0
+    uint32_t version;        // 4
+    uint32_t controllerPid;  // 8
+    uint32_t targetPid;      // 12
+    uint32_t reserved;       // 16
+    uint32_t enabled;        // 20
+    uint32_t hookReady;      // 24
+    uint32_t avgFpsBits;     // 28  average FPS over the last publish window
+    uint32_t lowFpsBits;     // 32  FPS of the slowest frame in the window
+    uint32_t frameTimeBits;  // 36  average frame time in milliseconds
+    uint32_t heartbeat;      // 40  incremented on every published window
+    uint32_t targetFps;      // 44  frame limiter target, 0 = unlimited (controller -> helper)
+    uint32_t frameCount;     // 48  total frames written to frameTimesMs
+    uint32_t reserved2[3];   // 52
+    float frameTimesMs[FrameRingSize]; // 64  ring buffer of the most recent frame intervals
 };
 
 using PresentFunction = HRESULT(WINAPI*)(IDXGISwapChain*, UINT, UINT);
@@ -36,21 +48,49 @@ using Present1Function = HRESULT(WINAPI*)(IDXGISwapChain1*, UINT, UINT, const DX
 PresentFunction g_originalPresent = nullptr;
 Present1Function g_originalPresent1 = nullptr;
 std::atomic<bool> g_enabled{ false };
+std::atomic<void*> g_activeSwapChain{ nullptr };
 std::atomic<int64_t> g_lastPresent{ 0 };
-std::atomic<float> g_currentFps{ 0.0f };
 LARGE_INTEGER g_frequency{ };
 HANDLE g_configMapping = nullptr;
-void* g_configView = nullptr;
+SharedConfig* g_config = nullptr;
 
-void WriteHookReady(bool ready)
+HANDLE g_timer = nullptr;      // high-resolution waitable timer for the coarse part of a wait
+std::atomic<int64_t> g_nextFrame{ 0 }; // absolute QPC deadline of the next Present
+SRWLOCK g_statsLock = SRWLOCK_INIT;    // guards the window accumulators and the published stats block
+
+// Accumulators touched only by the thread presenting the active swap chain.
+double g_windowSeconds = 0.0;
+double g_windowSlowest = 0.0;
+uint32_t g_windowFrames = 0;
+
+uint32_t FloatBits(float value)
 {
-    if (g_configView == nullptr)
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+void PublishFps(float average, float low, float frameTimeMs)
+{
+    if (g_config == nullptr)
     {
         return;
     }
 
-    static_cast<SharedConfig*>(g_configView)->hookReady = ready ? 1u : 0u;
+    // Callers hold g_statsLock (StatsGuard): the render thread and the config thread both write here.
+    g_config->avgFpsBits = FloatBits(average);
+    g_config->lowFpsBits = FloatBits(low);
+    g_config->frameTimeBits = FloatBits(frameTimeMs);
+    g_config->heartbeat++;
 }
+
+struct StatsGuard
+{
+    StatsGuard() { AcquireSRWLockExclusive(&g_statsLock); }
+    ~StatsGuard() { ReleaseSRWLockExclusive(&g_statsLock); }
+    StatsGuard(const StatsGuard&) = delete;
+    StatsGuard& operator=(const StatsGuard&) = delete;
+};
 
 bool IsControllerAlive(uint32_t controllerPid)
 {
@@ -70,66 +110,195 @@ bool IsControllerAlive(uint32_t controllerPid)
     return result == WAIT_TIMEOUT;
 }
 
-void WriteCurrentFps()
+int64_t NowTicks()
 {
-    if (g_configView == nullptr)
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    return now.QuadPart;
+}
+
+double SecondsSince(int64_t earlier, int64_t now)
+{
+    return static_cast<double>(now - earlier) / static_cast<double>(g_frequency.QuadPart);
+}
+
+void ResetWindow()
+{
+    g_windowSeconds = 0.0;
+    g_windowSlowest = 0.0;
+    g_windowFrames = 0;
+}
+
+// Waits until the QPC deadline: a high-resolution timer for the bulk, then a short spin so the
+// frame lands within microseconds of the target instead of a scheduler tick (~1-15 ms) late.
+void SleepUntil(int64_t deadline)
+{
+    for (;;)
     {
+        const int64_t remaining = deadline - NowTicks();
+        if (remaining <= 0)
+        {
+            return;
+        }
+
+        const double ms = static_cast<double>(remaining) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
+        if (ms > 2.0)
+        {
+            if (g_timer != nullptr)
+            {
+                LARGE_INTEGER due{};
+                due.QuadPart = -static_cast<LONGLONG>((ms - 1.5) * 10000.0); // relative, 100 ns units
+                if (SetWaitableTimer(g_timer, &due, 0, nullptr, nullptr, FALSE))
+                {
+                    WaitForSingleObject(g_timer, 100);
+                    continue;
+                }
+            }
+
+            Sleep(1);
+        }
+        else
+        {
+            YieldProcessor();
+        }
+    }
+}
+
+// Evenly spaced presents: every frame is due one interval after the previous deadline, so a slow
+// frame is followed by a short wait (cadence is kept) and the error never accumulates.
+void LimitFrame(void* swapChain)
+{
+    if (g_config == nullptr || !g_enabled.load(std::memory_order_acquire) || g_frequency.QuadPart <= 0)
+    {
+        g_nextFrame.store(0, std::memory_order_relaxed);
         return;
     }
 
-    const float fps = g_enabled.load(std::memory_order_acquire)
-        ? g_currentFps.load(std::memory_order_relaxed)
-        : 0.0f;
-    uint32_t bits = 0;
-    std::memcpy(&bits, &fps, sizeof(bits));
-    static_cast<SharedConfig*>(g_configView)->currentFpsBits = bits;
+    const uint32_t fps = g_config->targetFps;
+    void* active = g_activeSwapChain.load(std::memory_order_relaxed);
+    if (fps < MinTargetFps || fps > MaxTargetFps || (active != nullptr && active != swapChain))
+    {
+        g_nextFrame.store(0, std::memory_order_relaxed);
+        return;
+    }
+
+    const int64_t interval = g_frequency.QuadPart / static_cast<int64_t>(fps);
+    const int64_t now = NowTicks();
+    int64_t deadline = g_nextFrame.load(std::memory_order_relaxed);
+    if (deadline == 0 || now > deadline + interval)
+    {
+        deadline = now; // first frame, or we fell more than a frame behind: resynchronise
+    }
+
+    SleepUntil(deadline);
+    g_nextFrame.store(deadline + interval, std::memory_order_relaxed);
 }
 
-void RefreshConfig()
+void RefreshConfig(bool checkController)
 {
-    if (g_configView == nullptr)
+    if (g_config == nullptr)
     {
         g_enabled.store(false, std::memory_order_release);
         return;
     }
 
-    const auto* config = static_cast<const SharedConfig*>(g_configView);
-    const bool valid = config->magic == ConfigMagic &&
-        config->version == ConfigVersion &&
-        config->targetPid == GetCurrentProcessId() &&
-        config->enabled != 0 &&
-        IsControllerAlive(config->controllerPid);
+    bool valid = g_config->magic == ConfigMagic &&
+        g_config->version == ConfigVersion &&
+        g_config->targetPid == GetCurrentProcessId() &&
+        g_config->enabled != 0;
+    if (valid && checkController)
+    {
+        valid = IsControllerAlive(g_config->controllerPid);
+    }
 
     g_enabled.store(valid, std::memory_order_release);
-    WriteCurrentFps();
+
+    // The controller zeroes this block when it (re)attaches, so keep re-asserting readiness.
+    g_config->hookReady = g_originalPresent != nullptr ? 1u : 0u;
+
+    // No frames for a while (paused, minimised, loading screen): report 0 instead of a stale value.
+    const int64_t last = g_lastPresent.load(std::memory_order_relaxed);
+    if (!valid || last == 0 || g_frequency.QuadPart <= 0 ||
+        SecondsSince(last, NowTicks()) > StaleSwapChainSeconds)
+    {
+        StatsGuard guard;
+        PublishFps(0.0f, 0.0f, 0.0f);
+    }
 }
 
-void RecordFps()
+void RecordFrame(void* swapChain)
 {
-    LARGE_INTEGER now{};
-    QueryPerformanceCounter(&now);
-    const int64_t previous = g_lastPresent.exchange(now.QuadPart, std::memory_order_relaxed);
-    if (previous == 0 || g_frequency.QuadPart <= 0)
+    if (!g_enabled.load(std::memory_order_acquire) || g_frequency.QuadPart <= 0)
     {
         return;
     }
 
-    const double elapsed = static_cast<double>(now.QuadPart - previous);
-    if (elapsed <= 0)
+    StatsGuard guard; // window accumulators, ring buffer and published stats are shared with the config thread
+    const int64_t now = NowTicks();
+    const int64_t last = g_lastPresent.load(std::memory_order_relaxed);
+    void* active = g_activeSwapChain.load(std::memory_order_relaxed);
+
+    // Overlays and secondary windows create swap chains of their own; follow a single one so
+    // their presents are not counted as game frames. Adopt another chain only when the old one went quiet.
+    if (active != swapChain)
+    {
+        const bool activeIsStale = active == nullptr || last == 0 || SecondsSince(last, now) > StaleSwapChainSeconds;
+        if (!activeIsStale)
+        {
+            return;
+        }
+
+        g_activeSwapChain.store(swapChain, std::memory_order_relaxed);
+        g_lastPresent.store(now, std::memory_order_relaxed);
+        ResetWindow();
+        return;
+    }
+
+    g_lastPresent.store(now, std::memory_order_relaxed);
+    if (last == 0)
     {
         return;
     }
 
-    const double fps = static_cast<double>(g_frequency.QuadPart) * 1000000000.0 / elapsed;
-    if (std::isfinite(fps) && fps >= 0.0 && fps <= 1000.0)
+    const double delta = SecondsSince(last, now);
+    if (delta <= 0.0 || delta > StaleSwapChainSeconds)
     {
-        g_currentFps.store(static_cast<float>(fps), std::memory_order_relaxed);
+        ResetWindow();
+        return;
+    }
+
+    if (g_config != nullptr)
+    {
+        const uint32_t index = g_config->frameCount;
+        g_config->frameTimesMs[index % FrameRingSize] = static_cast<float>(delta * 1000.0);
+        g_config->frameCount = index + 1;
+    }
+
+    g_windowSeconds += delta;
+    g_windowFrames++;
+    if (delta > g_windowSlowest)
+    {
+        g_windowSlowest = delta;
+    }
+
+    if (g_windowSeconds >= PublishWindowSeconds)
+    {
+        const double average = static_cast<double>(g_windowFrames) / g_windowSeconds;
+        const double low = g_windowSlowest > 0.0 ? 1.0 / g_windowSlowest : 0.0;
+        const double frameTimeMs = g_windowSeconds * 1000.0 / static_cast<double>(g_windowFrames);
+        if (std::isfinite(average) && average <= 20000.0)
+        {
+            PublishFps(static_cast<float>(average), static_cast<float>(low), static_cast<float>(frameTimeMs));
+        }
+
+        ResetWindow();
     }
 }
 
 HRESULT WINAPI HookPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
-    RecordFps();
+    LimitFrame(swapChain);
+    RecordFrame(swapChain);
     return g_originalPresent(swapChain, syncInterval, flags);
 }
 
@@ -139,7 +308,8 @@ HRESULT WINAPI HookPresent1(
     UINT flags,
     const DXGI_PRESENT_PARAMETERS* parameters)
 {
-    RecordFps();
+    LimitFrame(swapChain);
+    RecordFrame(swapChain);
     return g_originalPresent1(swapChain, syncInterval, flags, parameters);
 }
 
@@ -185,7 +355,7 @@ bool InstallHooksFromSwapChain(IDXGISwapChain* swapChain)
     return MH_ApplyQueued() == MH_OK;
 }
 
-bool TryCreateD3D11SwapChain(IDXGISwapChain** output)
+bool TryCreateD3D11SwapChain(HWND window, IDXGISwapChain** output)
 {
     IDXGISwapChain* swapChain = nullptr;
     ID3D11Device* device = nullptr;
@@ -197,7 +367,7 @@ bool TryCreateD3D11SwapChain(IDXGISwapChain** output)
     description.BufferDesc.RefreshRate.Numerator = 60;
     description.BufferDesc.RefreshRate.Denominator = 1;
     description.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    description.OutputWindow = GetDesktopWindow();
+    description.OutputWindow = window;
     description.SampleDesc.Count = 1;
     description.Windowed = TRUE;
     description.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
@@ -245,7 +415,7 @@ bool TryCreateD3D11SwapChain(IDXGISwapChain** output)
     return SUCCEEDED(result) && *output != nullptr;
 }
 
-bool TryCreateD3D12SwapChain(IDXGISwapChain** output)
+bool TryCreateD3D12SwapChain(HWND window, IDXGISwapChain** output)
 {
     ID3D12Device* device = nullptr;
     ID3D12CommandQueue* queue = nullptr;
@@ -278,7 +448,7 @@ bool TryCreateD3D12SwapChain(IDXGISwapChain** output)
         description.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         result = factory->CreateSwapChainForHwnd(
             queue,
-            GetDesktopWindow(),
+            window,
             &description,
             nullptr,
             nullptr,
@@ -298,6 +468,20 @@ bool TryCreateD3D12SwapChain(IDXGISwapChain** output)
     return SUCCEEDED(result) && *output != nullptr;
 }
 
+// A hidden 8x8 window owned by this process: DXGI refuses swap chains on windows of other processes
+// (such as the desktop window), so the throwaway swap chain needs a window of its own.
+HWND CreateDummyWindow()
+{
+    static const wchar_t className[] = L"ThermalScopeDummyWindow";
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    windowClass.lpfnWndProc = DefWindowProcW;
+    windowClass.hInstance = GetModuleHandleW(nullptr);
+    windowClass.lpszClassName = className;
+    RegisterClassExW(&windowClass); // fails harmlessly when the class already exists
+    return CreateWindowExW(0, className, L"", WS_OVERLAPPED, 0, 0, 8, 8, nullptr, nullptr, windowClass.hInstance, nullptr);
+}
+
 bool CreatePresentHook()
 {
     const MH_STATUS initializeResult = MH_Initialize();
@@ -306,39 +490,50 @@ bool CreatePresentHook()
         return false;
     }
 
-    IDXGISwapChain* swapChain = nullptr;
-    const bool created = TryCreateD3D11SwapChain(&swapChain) || TryCreateD3D12SwapChain(&swapChain);
-    if (!created)
+    HWND window = CreateDummyWindow();
+    if (window == nullptr)
     {
         return false;
     }
 
-    const bool installed = InstallHooksFromSwapChain(swapChain);
-    swapChain->Release();
+    IDXGISwapChain* swapChain = nullptr;
+    const bool created = TryCreateD3D11SwapChain(window, &swapChain) || TryCreateD3D12SwapChain(window, &swapChain);
+    bool installed = false;
+    if (created)
+    {
+        installed = InstallHooksFromSwapChain(swapChain);
+        swapChain->Release();
+    }
+
+    DestroyWindow(window);
     return installed;
 }
 
 DWORD WINAPI InitializeThread(LPVOID parameter)
 {
     (void)parameter;
-    g_configMapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, ConfigMappingName);
+    g_configMapping = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, ConfigMappingName);
     if (g_configMapping != nullptr)
     {
-        g_configView = MapViewOfFile(g_configMapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+        g_config = static_cast<SharedConfig*>(
+            MapViewOfFile(g_configMapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(SharedConfig)));
     }
 
     QueryPerformanceFrequency(&g_frequency);
-    bool hookReady = false;
-    unsigned int retryCount = 0;
+    // CREATE_WAITABLE_TIMER_HIGH_RESOLUTION (Windows 10 1803+); null falls back to Sleep(1).
+    g_timer = CreateWaitableTimerExW(nullptr, nullptr, 0x00000002, TIMER_ALL_ACCESS);
+    bool hookInstalled = false;
+    unsigned int tick = 0;
     while (true)
     {
-        RefreshConfig();
-        if (!hookReady && retryCount++ % 20 == 0)
+        // Poll the (cheap) config block often, but only probe the controller process every ~250 ms.
+        RefreshConfig(tick % 5 == 0);
+        if (!hookInstalled && tick % 20 == 0)
         {
-            hookReady = CreatePresentHook();
-            WriteHookReady(hookReady);
+            hookInstalled = CreatePresentHook();
         }
 
+        tick++;
         Sleep(50);
     }
 

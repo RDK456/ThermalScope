@@ -7,3 +7,9 @@ publish-single/
 *.suo
 *.userosscache
 *.sln.docstates
+
+# MinHook sources are fetched by native/build-native.ps1
+native/minhook-1.3.4/
+
+# release output
+dist/
