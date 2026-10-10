@@ -31,8 +31,6 @@ public sealed record UpdateInfo(
 public sealed class UpdateService
 {
     private const string Repository = "RDK456/ThermalScope";
-    private static readonly HttpClient Http = CreateClient();
-
     private static readonly string StagingRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ThermalScope", "update");
 
@@ -40,6 +38,9 @@ public sealed class UpdateService
         Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0);
 
     public static string CurrentVersionText => $"{CurrentVersion.Major}.{CurrentVersion.Minor}.{Math.Max(CurrentVersion.Build, 0)}";
+
+    // Declared after CurrentVersion: static initialisers run in textual order and CreateClient reads it.
+    private static readonly HttpClient Http = CreateClient();
 
     private static string InstallDirectory => AppContext.BaseDirectory.TrimEnd('\\');
     private static string ApplyScript => Path.Combine(InstallDirectory, "apply-update.ps1");
