@@ -106,6 +106,13 @@ internal static class AfterburnerReader
                 }
             }
 
+            // Afterburner's own "CPU temperature" is the hottest core; Quick CPU and most tools show the
+            // average, which is what people compare against, so report the average of the core sensors.
+            if (threads.Count > 0)
+            {
+                temperature = Math.Round(threads.Average(t => t.Item2), 1);
+            }
+
             return temperature is null && threads.Count == 0 ? null : new AfterburnerCpu(temperature, threads, clock, power);
         }
         catch

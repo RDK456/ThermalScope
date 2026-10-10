@@ -269,7 +269,7 @@ public sealed class HardwareMonitorService : IDisposable
         {
             if (!cpu.TemperatureCelsius.HasValue && external.Temperature is { } externalTemp)
             {
-                cpu = cpu with { TemperatureCelsius = externalTemp, TemperatureLabel = "CPU die · MSI Afterburner" };
+                cpu = cpu with { TemperatureCelsius = externalTemp, TemperatureLabel = "Core average · Afterburner" };
             }
 
             if (!cpu.ClockMegahertz.HasValue && external.ClockMegahertz is { } externalClock)
