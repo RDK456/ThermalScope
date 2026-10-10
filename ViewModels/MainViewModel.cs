@@ -233,6 +233,8 @@ public sealed class PacerViewModel : Bindable
     private string _fpsText = "--";
     private string _frameTimeText = "—";
     private string _lowText = "—";
+    private string _jitterText = "—";
+    private string _pacingHint = string.Empty;
     private string _statusText = "Waiting for a game.";
     private string _errorText = string.Empty;
     private bool _consentRequired;
@@ -265,6 +267,8 @@ public sealed class PacerViewModel : Bindable
     public string FpsText { get => _fpsText; private set => Set(ref _fpsText, value); }
     public string FrameTimeText { get => _frameTimeText; private set => Set(ref _frameTimeText, value); }
     public string LowText { get => _lowText; private set => Set(ref _lowText, value); }
+    public string JitterText { get => _jitterText; private set => Set(ref _jitterText, value); }
+    public string PacingHint { get => _pacingHint; private set => Set(ref _pacingHint, value); }
     public string StatusText { get => _statusText; private set => Set(ref _statusText, value); }
     public string ErrorText { get => _errorText; private set { if (Set(ref _errorText, value)) Raise(nameof(HasError)); } }
     public bool HasError => !string.IsNullOrWhiteSpace(_errorText);
@@ -336,8 +340,31 @@ public sealed class PacerViewModel : Bindable
         FrameTimeText = fps is { } s2 ? $"{s2.FrameTimeMs:0.0} ms" : "—";
         LowText = fps is { } s3 && s3.Low > 0 ? $"{s3.Low:0}" : "—";
 
+        PacingHint = DescribePacing(snapshot);
         UpdateGraph(snapshot);
         SyncProcesses(snapshot.VisibleProcesses);
+    }
+
+    private static string DescribePacing(GameMonitorSnapshot snapshot)
+    {
+        if (!snapshot.PacingLocked)
+        {
+            return "Precise timer: evenly spaced frames at any target. Works with every V-Sync / G-Sync setup.";
+        }
+
+        var hz = snapshot.RefreshHz;
+        if (hz <= 0)
+        {
+            return "Locked to refresh: the display sets the pace for targets that divide its refresh rate. Waiting for a game.";
+        }
+
+        var rates = string.Join(", ", Enumerable.Range(1, 4).Select(n => ((double)hz / n).ToString("0.#", CultureInfo.InvariantCulture)));
+        var target = snapshot.TargetFps;
+        var divisor = target > 0 ? (hz + target / 2) / target : 0;
+        var locked = divisor is >= 1 and <= 4 && Math.Abs((double)hz / divisor - target) <= 1.0;
+        return locked
+            ? $"Locked to your {hz} Hz display: every frame stays up for exactly {divisor} refresh{(divisor > 1 ? "es" : "")}."
+            : $"Your display runs at {hz} Hz. Pick {rates} to lock; {(target > 0 ? target + " FPS uses the precise timer" : "no limit is set")}.";
     }
 
     private void UpdateGraph(GameMonitorSnapshot snapshot)
@@ -351,6 +378,7 @@ public sealed class PacerViewModel : Bindable
             OverlayStabilityBrush = new SolidColorBrush(Color.FromRgb(0x9A, 0xA5, 0xB4));
             RangeText = string.Empty;
             ReferenceMs = double.NaN;
+            JitterText = "—";
             return;
         }
 
@@ -359,6 +387,10 @@ public sealed class PacerViewModel : Bindable
         {
             series[i] = frames[i];
         }
+
+        // Frame-to-frame spread: what the eye reads as (micro)stutter. Console-smooth delivery sits near 0.
+        var mean = series.Average();
+        JitterText = $"{Math.Sqrt(series.Sum(v => (v - mean) * (v - mean)) / series.Length):0.0} ms";
 
         var sorted = (double[])series.Clone();
         Array.Sort(sorted);

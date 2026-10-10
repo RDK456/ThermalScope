@@ -67,9 +67,11 @@ GPU values come from the graphics driver (NVIDIA/AMD/Intel) through LibreHardwar
 2. Allow the one-time prompt to attach the helper.
 3. Pick a target (presets, +/-, or type a number and press Apply). Changes apply to the running game immediately and are remembered per game.
 
-The helper (`native/ThermalScopeHook.dll`) hooks DXGI `Present`, waits before each present so frames arrive at an even cadence (high-resolution timer plus a short spin), and publishes FPS, frame time and a 240-frame ring through shared memory.
+The helper hooks `Present` (DXGI for DirectX 10/11/12, `IDirect3DDevice9::Present` for DirectX 9), waits before each present so frames arrive at an even cadence (high-resolution timer plus a short spin), and publishes FPS, frame time and a 240-frame ring through shared memory. A 64-bit helper (`native/ThermalScopeHook.dll`) and a 32-bit one (`ThermalScopeHook32.dll`) are embedded; the right one is injected after checking the game's bitness.
 
-Supported: 64-bit DirectX 10/11/12 games. Not supported: Vulkan, OpenGL, DirectX 9/8, 32-bit games, NVIDIA Reflex/DLSS frame-generation limiting. Games protected by Easy Anti-Cheat, BattlEye, Vanguard and similar are skipped on purpose; use the Xbox Game Bar counter there. Setup tips are in the app (fixed refresh: V-Sync on; G-Sync/FreeSync: limit a few FPS under the refresh rate).
+**Pacing modes** (Frame pacer > Pacing): *Precise timer* spaces frames evenly at any target. *Locked to refresh* is the console-style option: when the target divides your refresh rate (60 or 30 on 60 Hz, 72 on 144 Hz ...) the display's vertical blank sets the pace, so every frame stays up for exactly the same number of refreshes. The *Jitter* readout shows how much frame times vary (lower is smoother).
+
+Supported: 32-bit and 64-bit DirectX 9/10/11/12 games (Locked-to-refresh needs DirectX 10/11/12). Not supported: Vulkan, OpenGL, DirectX 8, NVIDIA Reflex/DLSS frame-generation limiting. Games protected by Easy Anti-Cheat, BattlEye, Vanguard and similar are skipped on purpose; use the Xbox Game Bar counter there. Setup tips are in the app (fixed refresh: V-Sync on; G-Sync/FreeSync: limit a few FPS under the refresh rate).
 
 ### Overlay
 
@@ -119,6 +121,6 @@ Needs Visual Studio Build Tools with the C++ workload and the Windows SDK; MinHo
 - `Services/HardwareMonitorService.cs` – sensors and Windows-counter fallbacks; `AfterburnerReader.cs` optional source
 - `Services/GameMonitorService.cs`, `GameFpsMonitor.cs`, `GameDetector.cs`, `AntiCheatGuard.cs`, `HookFileStore.cs`, `NativeProcessInjector.cs`, `SecureSharedMemory.cs` – pacer plumbing
 - `Services/HotkeyManager.cs`, `TrayIcon.cs`, `StartupManager.cs`, `ThemeManager.cs`, `AppSettings.cs`
-- `native/` – the DXGI hook (`ThermalScopeHook.cpp`, built DLL, build script)
+- `native/` – the Present hook (`ThermalScopeHook.cpp`, built x64 and x86 DLLs, build script)
 
 Settings are stored in `%LOCALAPPDATA%\ThermalScope\` (`settings.json`, `game-monitor.json`, `thermal-scope.log`).

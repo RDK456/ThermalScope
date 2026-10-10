@@ -12,7 +12,7 @@
     <RootNamespace>ThermalScope</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <Version>1.1.3</Version>
+    <Version>1.2.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -44,5 +44,6 @@
   <ItemGroup>
     <EmbeddedResource Include="install-pawnio.ps1" LogicalName="ThermalScope.install-pawnio.ps1" />
     <EmbeddedResource Include="native\ThermalScopeHook.dll" LogicalName="ThermalScope.ThermalScopeHook.dll" />
+    <EmbeddedResource Include="native\ThermalScopeHook32.dll" LogicalName="ThermalScope.ThermalScopeHook32.dll" />
   </ItemGroup>
 </Project>

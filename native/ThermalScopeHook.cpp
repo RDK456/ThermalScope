@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <d3d9.h>
 #include <d3d11.h>
 #include <d3d12.h>
 #include <dxgi.h>
@@ -15,7 +16,9 @@ namespace
 {
 constexpr uint32_t ConfigMagic = 0x54494D31; // "1MIT" in little-endian byte order.
 constexpr uint32_t ConfigVersion = 3;
-constexpr wchar_t ConfigMappingName[] = L"Local\\ThermalScopeFpsConfig";
+// The trailing 3 is the layout version: a helper left loaded in a game by an older build keeps its own block
+// and cannot interfere with the one the current app uses.
+constexpr wchar_t ConfigMappingName[] = L"Local\\ThermalScopeFpsConfig3";
 constexpr double StaleSwapChainSeconds = 1.0;
 constexpr double PublishWindowSeconds = 0.5;
 constexpr uint32_t FrameRingSize = 240;
@@ -38,7 +41,9 @@ struct SharedConfig
     uint32_t heartbeat;      // 40  incremented on every published window
     uint32_t targetFps;      // 44  frame limiter target, 0 = unlimited (controller -> helper)
     uint32_t frameCount;     // 48  total frames written to frameTimesMs
-    uint32_t reserved2[3];   // 52
+    uint32_t pacingMode;     // 52  0 = precise timer, 1 = lock to the display refresh (controller -> helper)
+    uint32_t refreshHz;      // 56  refresh rate of the game's display (helper -> controller)
+    uint32_t reserved2;      // 60
     float frameTimesMs[FrameRingSize]; // 64  ring buffer of the most recent frame intervals
 };
 
@@ -194,6 +199,73 @@ void LimitFrame(void* swapChain)
     g_nextFrame.store(deadline + interval, std::memory_order_relaxed);
 }
 
+std::atomic<uint32_t> g_refreshHz{ 0 };
+std::atomic<int64_t> g_refreshStamp{ 0 };
+
+// Refresh rate of the monitor the game window is on; re-read about once a second (it can change or move).
+void UpdateRefreshRate(IDXGISwapChain* swapChain, int64_t now)
+{
+    const int64_t stamp = g_refreshStamp.load(std::memory_order_relaxed);
+    if (stamp != 0 && SecondsSince(stamp, now) < 1.0)
+    {
+        return;
+    }
+
+    g_refreshStamp.store(now, std::memory_order_relaxed);
+    DXGI_SWAP_CHAIN_DESC description{};
+    if (FAILED(swapChain->GetDesc(&description)) || description.OutputWindow == nullptr)
+    {
+        return;
+    }
+
+    MONITORINFOEXW monitor{};
+    monitor.cbSize = sizeof(monitor);
+    if (!GetMonitorInfoW(MonitorFromWindow(description.OutputWindow, MONITOR_DEFAULTTONEAREST), &monitor))
+    {
+        return;
+    }
+
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    if (EnumDisplaySettingsW(monitor.szDevice, ENUM_CURRENT_SETTINGS, &mode) && mode.dmDisplayFrequency > 1)
+    {
+        g_refreshHz.store(mode.dmDisplayFrequency, std::memory_order_relaxed);
+        if (g_config != nullptr)
+        {
+            g_config->refreshHz = mode.dmDisplayFrequency;
+        }
+    }
+}
+
+// Console-style pacing: when the target divides the refresh rate (60 on 60 Hz, 30 on 60 Hz, 72 on 144 Hz ...)
+// let the display's vertical blank set the pace instead of a timer. Every frame then stays on screen for exactly
+// the same number of refreshes, which a timer cannot guarantee (timer and display clocks always drift apart).
+bool LockToRefresh(void* swapChain, UINT& syncInterval, UINT& flags)
+{
+    if (g_config == nullptr || !g_enabled.load(std::memory_order_acquire) || g_config->pacingMode != 1)
+    {
+        return false;
+    }
+
+    const uint32_t fps = g_config->targetFps;
+    const uint32_t hz = g_refreshHz.load(std::memory_order_relaxed);
+    void* active = g_activeSwapChain.load(std::memory_order_relaxed);
+    if (fps < MinTargetFps || hz < 24 || hz > 1000 || (active != nullptr && active != swapChain))
+    {
+        return false;
+    }
+
+    const uint32_t divisor = (hz + fps / 2) / fps;
+    if (divisor < 1 || divisor > 4 || std::fabs(static_cast<double>(hz) / divisor - fps) > 1.0)
+    {
+        return false;
+    }
+
+    syncInterval = divisor;
+    flags &= ~static_cast<UINT>(DXGI_PRESENT_ALLOW_TEARING);
+    return true;
+}
+
 void RefreshConfig(bool checkController)
 {
     if (g_config == nullptr)
@@ -202,19 +274,26 @@ void RefreshConfig(bool checkController)
         return;
     }
 
-    bool valid = g_config->magic == ConfigMagic &&
+    // The block belongs to whichever game the controller attached last. A helper still loaded in an
+    // earlier game must stay out of the way: no limiting and no writes into the new game's stats.
+    const bool mine = g_config->magic == ConfigMagic &&
         g_config->version == ConfigVersion &&
-        g_config->targetPid == GetCurrentProcessId() &&
-        g_config->enabled != 0;
+        g_config->targetPid == GetCurrentProcessId();
+    bool valid = mine && g_config->enabled != 0;
     if (valid && checkController)
     {
         valid = IsControllerAlive(g_config->controllerPid);
     }
 
     g_enabled.store(valid, std::memory_order_release);
+    if (!mine)
+    {
+        return;
+    }
 
     // The controller zeroes this block when it (re)attaches, so keep re-asserting readiness.
-    g_config->hookReady = g_originalPresent != nullptr ? 1u : 0u;
+    // Ready means a frame was actually seen: a hook on an API the game does not use must not report success.
+    g_config->hookReady = g_activeSwapChain.load(std::memory_order_relaxed) != nullptr ? 1u : 0u;
 
     // No frames for a while (paused, minimised, loading screen): report 0 instead of a stale value.
     const int64_t last = g_lastPresent.load(std::memory_order_relaxed);
@@ -295,10 +374,30 @@ void RecordFrame(void* swapChain)
     }
 }
 
+// Shared by both Present flavours; DXGI_PRESENT_TEST calls are not frames and are left alone.
+void PaceFrame(IDXGISwapChain* swapChain, UINT& syncInterval, UINT& flags)
+{
+    if (flags & DXGI_PRESENT_TEST)
+    {
+        return;
+    }
+
+    UpdateRefreshRate(swapChain, NowTicks());
+    if (LockToRefresh(swapChain, syncInterval, flags))
+    {
+        g_nextFrame.store(0, std::memory_order_relaxed); // the vblank paces; leave no stale timer deadline behind
+    }
+    else
+    {
+        LimitFrame(swapChain);
+    }
+
+    RecordFrame(swapChain);
+}
+
 HRESULT WINAPI HookPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags)
 {
-    LimitFrame(swapChain);
-    RecordFrame(swapChain);
+    PaceFrame(swapChain, syncInterval, flags);
     return g_originalPresent(swapChain, syncInterval, flags);
 }
 
@@ -308,9 +407,156 @@ HRESULT WINAPI HookPresent1(
     UINT flags,
     const DXGI_PRESENT_PARAMETERS* parameters)
 {
+    PaceFrame(swapChain, syncInterval, flags);
+    return g_originalPresent1(swapChain, syncInterval, flags, parameters);
+}
+
+// ---- Direct3D 9 (most 32-bit games) -------------------------------------------------------------
+using D3D9PresentFunction = HRESULT(WINAPI*)(void*, const RECT*, const RECT*, HWND, const RGNDATA*);
+using D3D9PresentExFunction = HRESULT(WINAPI*)(void*, const RECT*, const RECT*, HWND, const RGNDATA*, DWORD);
+using D3D9SwapPresentFunction = HRESULT(WINAPI*)(void*, const RECT*, const RECT*, HWND, const RGNDATA*, DWORD);
+
+D3D9PresentFunction g_d3d9DevicePresent = nullptr;     // IDirect3DDevice9::Present
+D3D9PresentFunction g_d3d9ExDevicePresent = nullptr;   // same slot on a D3D9Ex device, when it is a different function
+D3D9PresentExFunction g_d3d9PresentEx = nullptr;       // IDirect3DDevice9Ex::PresentEx
+D3D9SwapPresentFunction g_d3d9SwapPresent = nullptr;   // IDirect3DSwapChain9::Present
+
+// A device and its swap chain can both be hooked (and one may call the other): only the first
+// caller through becomes the active "swap chain", the nested call is ignored by both helpers.
+HRESULT WINAPI HookD3D9DevicePresent(void* device, const RECT* a, const RECT* b, HWND c, const RGNDATA* d)
+{
+    LimitFrame(device);
+    RecordFrame(device);
+    return g_d3d9DevicePresent(device, a, b, c, d);
+}
+
+HRESULT WINAPI HookD3D9ExDevicePresent(void* device, const RECT* a, const RECT* b, HWND c, const RGNDATA* d)
+{
+    LimitFrame(device);
+    RecordFrame(device);
+    return g_d3d9ExDevicePresent(device, a, b, c, d);
+}
+
+HRESULT WINAPI HookD3D9PresentEx(void* device, const RECT* a, const RECT* b, HWND c, const RGNDATA* d, DWORD flags)
+{
+    LimitFrame(device);
+    RecordFrame(device);
+    return g_d3d9PresentEx(device, a, b, c, d, flags);
+}
+
+HRESULT WINAPI HookD3D9SwapPresent(void* swapChain, const RECT* a, const RECT* b, HWND c, const RGNDATA* d, DWORD flags)
+{
     LimitFrame(swapChain);
     RecordFrame(swapChain);
-    return g_originalPresent1(swapChain, syncInterval, flags, parameters);
+    return g_d3d9SwapPresent(swapChain, a, b, c, d, flags);
+}
+
+// Diagnostics for support: set THERMALSCOPE_HOOK_LOG to a file path before starting the game.
+void Log(const char* text, long long a = 0, long long b = 0)
+{
+    wchar_t path[MAX_PATH];
+    if (GetEnvironmentVariableW(L"THERMALSCOPE_HOOK_LOG", path, MAX_PATH) == 0)
+    {
+        return;
+    }
+
+    char line[256];
+    const int length = wsprintfA(line, "%s %d %d\r\n", text, static_cast<int>(a), static_cast<int>(b));
+    HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE)
+    {
+        DWORD written = 0;
+        WriteFile(file, line, static_cast<DWORD>(length), &written, nullptr);
+        CloseHandle(file);
+    }
+}
+
+bool HookTarget(void* target, void* detour, void** original)
+{
+    if (target == nullptr)
+    {
+        return false;
+    }
+
+    const MH_STATUS created = MH_CreateHook(target, detour, original);
+    Log("d3d9 hook create", created, reinterpret_cast<long long>(target));
+    return created == MH_OK && MH_QueueEnableHook(target) == MH_OK;
+}
+
+bool InstallD3D9Hooks(HWND window)
+{
+    D3DPRESENT_PARAMETERS parameters{};
+    parameters.Windowed = TRUE;
+    parameters.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    parameters.BackBufferFormat = D3DFMT_UNKNOWN;
+    parameters.BackBufferWidth = 8;
+    parameters.BackBufferHeight = 8;
+    parameters.BackBufferCount = 1;
+    parameters.hDeviceWindow = window;
+    const DWORD behaviour = D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE;
+
+    void* devicePresent = nullptr;
+    void* swapPresent = nullptr;
+    IDirect3D9* d3d = Direct3DCreate9(D3D_SDK_VERSION);
+    if (d3d != nullptr)
+    {
+        IDirect3DDevice9* device = nullptr;
+        const HRESULT created = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window, behaviour, &parameters, &device);
+        Log("d3d9 CreateDevice", created);
+        if (SUCCEEDED(created) && device != nullptr)
+        {
+            devicePresent = (*reinterpret_cast<void***>(device))[17];
+            IDirect3DSwapChain9* swap = nullptr;
+            if (SUCCEEDED(device->GetSwapChain(0, &swap)) && swap != nullptr)
+            {
+                swapPresent = (*reinterpret_cast<void***>(swap))[3];
+                swap->Release();
+            }
+            device->Release();
+        }
+        d3d->Release();
+    }
+
+    // Games that use Direct3DCreate9Ex get a different runtime object; hook what it uses as well.
+    void* exDevicePresent = nullptr;
+    void* presentEx = nullptr;
+    using CreateEx = HRESULT(WINAPI*)(UINT, IDirect3D9Ex**);
+    const HMODULE d3d9Module = GetModuleHandleW(L"d3d9.dll");
+    const auto createEx = d3d9Module != nullptr ? reinterpret_cast<CreateEx>(GetProcAddress(d3d9Module, "Direct3DCreate9Ex")) : nullptr;
+    IDirect3D9Ex* d3dEx = nullptr;
+    if (createEx != nullptr && SUCCEEDED(createEx(D3D_SDK_VERSION, &d3dEx)) && d3dEx != nullptr)
+    {
+        IDirect3DDevice9Ex* device = nullptr;
+        if (SUCCEEDED(d3dEx->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window, behaviour, &parameters, nullptr, &device)) && device != nullptr)
+        {
+            void** vtable = *reinterpret_cast<void***>(device);
+            exDevicePresent = vtable[17];
+            presentEx = vtable[121];
+            if (swapPresent == nullptr)
+            {
+                IDirect3DSwapChain9* swap = nullptr;
+                if (SUCCEEDED(device->GetSwapChain(0, &swap)) && swap != nullptr)
+                {
+                    swapPresent = (*reinterpret_cast<void***>(swap))[3];
+                    swap->Release();
+                }
+            }
+            device->Release();
+        }
+        d3dEx->Release();
+    }
+
+    bool any = false;
+    any |= HookTarget(devicePresent, reinterpret_cast<void*>(&HookD3D9DevicePresent), reinterpret_cast<void**>(&g_d3d9DevicePresent));
+    if (exDevicePresent != devicePresent)
+    {
+        any |= HookTarget(exDevicePresent, reinterpret_cast<void*>(&HookD3D9ExDevicePresent), reinterpret_cast<void**>(&g_d3d9ExDevicePresent));
+    }
+    any |= HookTarget(presentEx, reinterpret_cast<void*>(&HookD3D9PresentEx), reinterpret_cast<void**>(&g_d3d9PresentEx));
+    any |= HookTarget(swapPresent, reinterpret_cast<void*>(&HookD3D9SwapPresent), reinterpret_cast<void**>(&g_d3d9SwapPresent));
+    const MH_STATUS applied = any ? MH_ApplyQueued() : MH_ERROR_NOT_CREATED;
+    Log("d3d9 apply", applied, any);
+    return applied == MH_OK;
 }
 
 bool InstallHooksFromSwapChain(IDXGISwapChain* swapChain)
@@ -482,31 +728,41 @@ HWND CreateDummyWindow()
     return CreateWindowExW(0, className, L"", WS_OVERLAPPED, 0, 0, 8, 8, nullptr, nullptr, windowClass.hInstance, nullptr);
 }
 
-bool CreatePresentHook()
+bool g_dxgiHooked = false;
+bool g_d3d9Hooked = false;
+
+// Hooks whatever the game renders with. Direct3D 9 is only probed once the game has loaded d3d9.dll,
+// so a DXGI game is never pushed into loading it.
+void InstallPresentHooks()
 {
     const MH_STATUS initializeResult = MH_Initialize();
     if (initializeResult != MH_OK && initializeResult != MH_ERROR_ALREADY_INITIALIZED)
     {
-        return false;
+        return;
     }
 
     HWND window = CreateDummyWindow();
     if (window == nullptr)
     {
-        return false;
+        return;
     }
 
-    IDXGISwapChain* swapChain = nullptr;
-    const bool created = TryCreateD3D11SwapChain(window, &swapChain) || TryCreateD3D12SwapChain(window, &swapChain);
-    bool installed = false;
-    if (created)
+    if (!g_dxgiHooked)
     {
-        installed = InstallHooksFromSwapChain(swapChain);
-        swapChain->Release();
+        IDXGISwapChain* swapChain = nullptr;
+        if (TryCreateD3D11SwapChain(window, &swapChain) || TryCreateD3D12SwapChain(window, &swapChain))
+        {
+            g_dxgiHooked = InstallHooksFromSwapChain(swapChain);
+            swapChain->Release();
+        }
+    }
+
+    if (!g_d3d9Hooked && GetModuleHandleW(L"d3d9.dll") != nullptr)
+    {
+        g_d3d9Hooked = InstallD3D9Hooks(window);
     }
 
     DestroyWindow(window);
-    return installed;
 }
 
 DWORD WINAPI InitializeThread(LPVOID parameter)
@@ -522,15 +778,14 @@ DWORD WINAPI InitializeThread(LPVOID parameter)
     QueryPerformanceFrequency(&g_frequency);
     // CREATE_WAITABLE_TIMER_HIGH_RESOLUTION (Windows 10 1803+); null falls back to Sleep(1).
     g_timer = CreateWaitableTimerExW(nullptr, nullptr, 0x00000002, TIMER_ALL_ACCESS);
-    bool hookInstalled = false;
     unsigned int tick = 0;
     while (true)
     {
         // Poll the (cheap) config block often, but only probe the controller process every ~250 ms.
         RefreshConfig(tick % 5 == 0);
-        if (!hookInstalled && tick % 20 == 0)
+        if (tick % 20 == 0 && (!g_dxgiHooked || (!g_d3d9Hooked && GetModuleHandleW(L"d3d9.dll") != nullptr)))
         {
-            hookInstalled = CreatePresentHook();
+            InstallPresentHooks();
         }
 
         tick++;

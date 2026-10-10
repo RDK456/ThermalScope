@@ -411,6 +411,15 @@
                                 <Button Content="No limit" Tag="0" Style="{StaticResource GhostButton}" Click="Preset_Click" Padding="14,5" MinHeight="32" Margin="0,0,6,6" />
                             </WrapPanel>
 
+                            <TextBlock Text="Pacing" Style="{StaticResource Caption}" Margin="0,12,0,6" />
+                            <StackPanel x:Name="PacingChips" Orientation="Horizontal">
+                                <RadioButton Content="Precise timer" Tag="Timer" GroupName="Pacing" Style="{StaticResource ChipRadio}" Click="Pacing_Click" Margin="0,0,6,0"
+                                             ToolTip="Evenly spaced frames at any target (works everywhere)" />
+                                <RadioButton Content="Locked to refresh" Tag="Locked" GroupName="Pacing" Style="{StaticResource ChipRadio}" Click="Pacing_Click"
+                                             ToolTip="Console-style: the display's refresh sets the pace (targets that divide the refresh rate, DirectX 10/11/12)" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding PacingHint}" Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,6,0,0" />
+
                             <TextBlock Text="{Binding StatusText}" Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap" />
                         </StackPanel>
                     </c:Card>
@@ -442,6 +451,10 @@
                                     <StackPanel Margin="0,0,28,0">
                                         <TextBlock Text="Frame time" Style="{StaticResource Caption}" />
                                         <TextBlock Text="{Binding FrameTimeText}" Style="{StaticResource Metric}" />
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,28,0">
+                                        <TextBlock Text="Jitter" Style="{StaticResource Caption}" ToolTip="How much frame times vary (lower is smoother)" />
+                                        <TextBlock Text="{Binding JitterText}" Style="{StaticResource Metric}" />
                                     </StackPanel>
                                     <StackPanel Margin="0,0,28,0">
                                         <TextBlock Text="Slowest frame" Style="{StaticResource Caption}" ToolTip="FPS of the slowest frame in the last half second" />
@@ -525,7 +538,7 @@
                         <StackPanel>
                             <TextBlock Text="What works" Style="{StaticResource CardTitle}" />
                             <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,8,0,0" LineHeight="20"
-                                       Text="64-bit DirectX 10, 11 and 12 games in borderless fullscreen, from Steam, other stores or a plain executable. Games with anti-cheat (Easy Anti-Cheat, BattlEye, Vanguard) are skipped on purpose. Vulkan, OpenGL, DirectX 9 and 32-bit games are not supported yet." />
+                                       Text="DirectX 9, 10, 11 and 12 games, 32-bit and 64-bit, in borderless fullscreen, from Steam, other stores or a plain executable. Games with anti-cheat (Easy Anti-Cheat, BattlEye, Vanguard) are skipped on purpose. Vulkan and OpenGL are not supported." />
                         </StackPanel>
                     </c:Card>
                 </StackPanel>

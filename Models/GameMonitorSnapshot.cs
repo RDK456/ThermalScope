@@ -25,4 +25,6 @@ public sealed record GameMonitorSnapshot(
     bool LimiterEnabled,
     float[] FrameTimes,
     string Status,
-    string? Error = null);
+    string? Error = null,
+    int RefreshHz = 0,
+    bool PacingLocked = false);

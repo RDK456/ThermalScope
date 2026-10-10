@@ -1,12 +1,12 @@
 # Native frame-pacer helper
 
-`ThermalScopeHook.dll` is the small x64 helper that ThermalScope loads into a game you chose. It uses MinHook to hook DXGI `Present` / `Present1`, then:
+`ThermalScopeHook.dll` (x64) and `ThermalScopeHook32.dll` (x86, for 32-bit games) are the small helpers that ThermalScope loads into a game you chose. It uses MinHook to hook DXGI `Present` / `Present1`, then:
 
 - waits before each present so frames are evenly spaced (the frame limiter; target set live through shared memory),
 - publishes average FPS, slowest-frame FPS, frame time and a 240-frame ring buffer for the graph and overlay,
 - follows a single swap chain (overlay swap chains are ignored) and reports 0 when the game stops presenting.
 
-It is limited to user-selected, 64-bit DirectX 10/11/12 processes, is never attached to Windows processes or anti-cheat protected games, and stops limiting if ThermalScope exits. It stays loaded until the game exits so in-flight frames cannot race an unload.
+It is limited to user-selected, DirectX 9/10/11/12 processes (32-bit or 64-bit), is never attached to Windows processes or anti-cheat protected games, and stops limiting if ThermalScope exits. It stays loaded until the game exits so in-flight frames cannot race an unload.
 
 The shared-memory layout (version 3) is documented at the top of `ThermalScopeHook.cpp` and mirrored in `Services/GameFpsMonitor.cs`.
 

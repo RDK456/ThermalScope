@@ -136,6 +136,28 @@ public sealed class GameMonitorService : IDisposable
         SetLimit(current <= 0 ? 60 : Math.Clamp(current + delta, MinFps, MaxFps));
     }
 
+    /// <summary>Console-style pacing: let the display refresh set the pace when the target divides it.</summary>
+    public void SetPacingLocked(bool locked)
+    {
+        lock (_gate)
+        {
+            _settings.PacingLocked = locked;
+            SaveSettings();
+            Refresh();
+        }
+    }
+
+    public bool PacingLocked
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _settings.PacingLocked;
+            }
+        }
+    }
+
     public void SetLimiterEnabled(bool enabled)
     {
         lock (_gate)
@@ -257,13 +279,14 @@ public sealed class GameMonitorService : IDisposable
     private GameMonitorSnapshot Capture()
     {
         string? manualExecutable;
-        bool autoDetect, autoMonitor, limiterOn;
+        bool autoDetect, autoMonitor, limiterOn, pacingLocked;
         lock (_gate)
         {
             manualExecutable = _settings.ExecutableName;
             autoDetect = _settings.AutoDetect;
             autoMonitor = _settings.AutoMonitor;
             limiterOn = _limiterOn;
+            pacingLocked = _settings.PacingLocked;
         }
 
         if (++_ticksSinceScan >= ScanEveryTicks)
@@ -355,7 +378,8 @@ public sealed class GameMonitorService : IDisposable
 
             if (_monitorAttached)
             {
-                monitor!.SetTargetFps(limiterOn ? storedLimit : 0);
+                monitor!.SetPacingLocked(pacingLocked);
+                monitor.SetTargetFps(limiterOn ? storedLimit : 0);
                 if (monitor.IsHookReady)
                 {
                     status = limiterOn && storedLimit > 0
@@ -366,7 +390,7 @@ public sealed class GameMonitorService : IDisposable
                 else if ((DateTime.UtcNow - _attachedAtUtc).TotalSeconds > HookTimeoutSeconds)
                 {
                     status = $"Attached to {executable}, but no DirectX 10/11/12 swap chain was found.";
-                    error = "Vulkan, OpenGL, DirectX 9 and 32-bit games are not supported yet.";
+                    error = "Vulkan, OpenGL and DirectX 8 are not supported.";
                 }
                 else
                 {
@@ -403,7 +427,9 @@ public sealed class GameMonitorService : IDisposable
             limiterOn,
             frameTimes,
             status,
-            error);
+            error,
+            _monitorAttached ? monitor?.RefreshHz ?? 0 : 0,
+            pacingLocked);
     }
 
     private void RefreshDetectedGame()
@@ -560,6 +586,7 @@ public sealed class GameMonitorService : IDisposable
         public bool AutoMonitor { get; set; } = true;
         public bool AutoDetect { get; set; } = true;
         public int DefaultFps { get; set; }
+        public bool PacingLocked { get; set; }
         public Dictionary<string, int> Limits { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }

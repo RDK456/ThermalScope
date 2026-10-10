@@ -8,7 +8,7 @@ namespace ThermalScope.Services;
 /// </summary>
 public sealed class GameFpsMonitor : IDisposable
 {
-    private const string MappingName = @"Local\ThermalScopeFpsConfig";
+    private const string MappingName = @"Local\ThermalScopeFpsConfig3";
     private const int ConfigSize = 1024;
     private const int ConfigMagic = 0x54494D31;
     private const int ConfigVersion = 3;
@@ -23,18 +23,31 @@ public sealed class GameFpsMonitor : IDisposable
     private const int OffsetFrameTime = 36;
     private const int OffsetLimit = 44;
     private const int OffsetFrameCount = 48;
+    private const int OffsetPacing = 52;
+    private const int OffsetRefresh = 56;
     private const int OffsetFrames = 64;
 
     private readonly HookFileStore.HookFile? _hook;
+    private readonly HookFileStore.HookFile? _hook32;
     private SecureSharedMemory? _memory;
     private int _attachedProcessId;
     private int _targetFps;
+    private bool _pacingLocked;
 
     public GameFpsMonitor()
     {
         try
         {
             _hook = HookFileStore.Prepare();
+            try
+            {
+                _hook32 = HookFileStore.Prepare(x86: true);
+            }
+            catch
+            {
+                // 64-bit games still work; 32-bit ones report that their helper is missing.
+            }
+
             IsAvailable = true;
             Status = "Frame pacer ready.";
         }
@@ -78,8 +91,22 @@ public sealed class GameFpsMonitor : IDisposable
             WriteConfig(processId, true);
             if (_attachedProcessId != processId)
             {
-                using var locked = HookFileStore.OpenVerified(_hook);
-                if (!NativeProcessInjector.Inject(processId, _hook.Path, out error))
+                if (!NativeProcessInjector.TryGetBitness(processId, out var is32Bit, out error))
+                {
+                    Disable();
+                    return false;
+                }
+
+                var hook = is32Bit ? _hook32 : _hook;
+                if (hook is null)
+                {
+                    error = "The 32-bit frame pacer helper is not available in this build.";
+                    Disable();
+                    return false;
+                }
+
+                using var locked = HookFileStore.OpenVerified(hook);
+                if (!NativeProcessInjector.Inject(processId, hook.Path, is32Bit, out error))
                 {
                     Disable();
                     return false;
@@ -98,6 +125,16 @@ public sealed class GameFpsMonitor : IDisposable
             return false;
         }
     }
+
+    /// <summary>Lock to the display refresh (console-style) when the target divides it; otherwise the precise timer is used.</summary>
+    public void SetPacingLocked(bool locked)
+    {
+        _pacingLocked = locked;
+        _memory?.WriteInt32(OffsetPacing, locked ? 1 : 0);
+    }
+
+    /// <summary>Refresh rate (Hz) of the display the game is on, as seen by the helper; 0 until known.</summary>
+    public int RefreshHz => _memory?.ReadInt32(OffsetRefresh) ?? 0;
 
     /// <summary>True once the helper has hooked a DirectX swap chain inside the game.</summary>
     public bool IsHookReady => _memory is not null && _memory.ReadInt32(OffsetHookReady) == 1;
@@ -190,6 +227,8 @@ public sealed class GameFpsMonitor : IDisposable
         memory.WriteInt32(OffsetController, Environment.ProcessId);
         memory.WriteInt32(OffsetTarget, targetProcessId);
         memory.WriteInt32(16, 0);
+        memory.WriteInt32(OffsetPacing, _pacingLocked ? 1 : 0);
+        memory.WriteInt32(OffsetRefresh, 0);
         memory.WriteInt32(OffsetEnabled, enabled ? 1 : 0);
         memory.WriteInt32(OffsetLimit, enabled ? _targetFps : 0);
         memory.WriteInt32(OffsetAverage, 0);

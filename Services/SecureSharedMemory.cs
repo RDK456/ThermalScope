@@ -16,6 +16,7 @@ internal sealed class SecureSharedMemory : IDisposable
     private const uint FileMapRead = 0x0004;
     private const uint FileMapWrite = 0x0002;
     private const uint SddlRevision1 = 1;
+    private const int ErrorAccessDenied = 5;
 
     private IntPtr _mapping;
     private IntPtr _view;
@@ -49,9 +50,15 @@ internal sealed class SecureSharedMemory : IDisposable
             };
 
             var mapping = CreateFileMappingW(new IntPtr(-1), ref attributes, PageReadWrite, 0, (uint)size, name);
+            if (mapping == IntPtr.Zero && Marshal.GetLastWin32Error() == ErrorAccessDenied)
+            {
+                // A helper left loaded in a running game by an earlier run of this app still holds the block.
+                mapping = OpenFileMappingW(FileMapRead | FileMapWrite, false, name);
+            }
+
             if (mapping == IntPtr.Zero)
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateFileMapping failed.");
+                { var code = Marshal.GetLastWin32Error(); throw new Win32Exception(code, $"CreateFileMapping failed: {new Win32Exception(code).Message}"); }
             }
 
             var view = MapViewOfFile(mapping, FileMapRead | FileMapWrite, 0, 0, (UIntPtr)size);
@@ -107,6 +114,9 @@ internal sealed class SecureSharedMemory : IDisposable
         uint maximumSizeHigh,
         uint maximumSizeLow,
         string name);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenFileMappingW(uint desiredAccess, bool inheritHandle, string name);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr MapViewOfFile(

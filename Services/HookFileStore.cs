@@ -14,15 +14,16 @@ namespace ThermalScope.Services;
 /// </summary>
 internal static class HookFileStore
 {
-    private const string ResourceName = "ThermalScope.ThermalScopeHook.dll";
-    private const string FilePrefix = "ThermalScopeHook-";
 
     public sealed record HookFile(string Path, string Sha256);
 
-    public static HookFile Prepare()
+    /// <summary>Extracts the x64 helper, or the x86 one used for 32-bit games.</summary>
+    public static HookFile Prepare(bool x86 = false)
     {
+        var resourceName = x86 ? "ThermalScope.ThermalScopeHook32.dll" : "ThermalScope.ThermalScopeHook.dll";
+        var filePrefix = x86 ? "ThermalScopeHook32-" : "ThermalScopeHook-";
         byte[] bytes;
-        using (var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream(ResourceName))
+        using (var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName))
         {
             if (resource is null)
             {
@@ -36,13 +37,13 @@ internal static class HookFileStore
 
         var hash = Convert.ToHexString(SHA256.HashData(bytes));
         var directory = EnsureDirectory();
-        var path = System.IO.Path.Combine(directory, $"{FilePrefix}{hash[..12]}.dll");
+        var path = System.IO.Path.Combine(directory, $"{filePrefix}{hash[..12]}.dll");
         if (!File.Exists(path) || !HashMatches(path, hash))
         {
             File.WriteAllBytes(path, bytes);
         }
 
-        DeleteOldVersions(directory, path);
+        DeleteOldVersions(directory, filePrefix, path);
         return new HookFile(path, hash);
     }
 
@@ -117,9 +118,9 @@ internal static class HookFileStore
             PropagationFlags.None,
             AccessControlType.Allow));
 
-    private static void DeleteOldVersions(string directory, string keep)
+    private static void DeleteOldVersions(string directory, string filePrefix, string keep)
     {
-        foreach (var file in Directory.EnumerateFiles(directory, FilePrefix + "*.dll"))
+        foreach (var file in Directory.EnumerateFiles(directory, filePrefix + "*.dll"))
         {
             if (string.Equals(file, keep, StringComparison.OrdinalIgnoreCase))
             {

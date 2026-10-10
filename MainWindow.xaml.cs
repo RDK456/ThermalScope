@@ -109,6 +109,7 @@ public partial class MainWindow : Window
         SelectChip(ThemeChips, _settings.Theme);
         SelectChip(UnitChips, _settings.UseFahrenheit ? "F" : "C");
         SelectChip(IntervalChips, (RefreshIntervals.Contains(_settings.IntervalSeconds) ? _settings.IntervalSeconds : 2).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        SelectChip(PacingChips, _game.PacingLocked ? "Locked" : "Timer");
         SelectChip(LookChips, _settings.Style);
         SelectChip(AccentChips, _settings.Accent);
         SelectChip(GaugeChips, _settings.GaugeMode);
@@ -707,6 +708,14 @@ public partial class MainWindow : Window
         var value = ParseTarget();
         ApplyLimit(value <= 0 ? 0 : Math.Clamp(value, GameMonitorService.MinFps, GameMonitorService.MaxFps));
         Keyboard.ClearFocus();
+    }
+
+    private void Pacing_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            _game.SetPacingLocked(tag == "Locked");
+        }
     }
 
     private void Preset_Click(object sender, RoutedEventArgs e)

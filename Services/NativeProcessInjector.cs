@@ -22,8 +22,10 @@ internal static class NativeProcessInjector
     private const ushort ImageFileMachineI386 = 0x014c;
     private const ushort ImageFileMachineAmd64 = 0x8664;
 
-    public static bool IsSupportedArchitecture(int processId, out string error)
+    /// <summary>Tells whether the process is a 32-bit (WOW64) or native 64-bit one. False for anything else.</summary>
+    public static bool TryGetBitness(int processId, out bool is32Bit, out string error)
     {
+        is32Bit = false;
         error = string.Empty;
         var process = OpenProcess(ProcessQueryInformation, false, (uint)processId);
         if (process == IntPtr.Zero)
@@ -36,10 +38,16 @@ internal static class NativeProcessInjector
         {
             if (IsWow64Process2(process, out var processMachine, out var nativeMachine))
             {
+                if (nativeMachine is not (ImageFileMachineUnknown or ImageFileMachineAmd64))
+                {
+                    error = "The selected game is not running on an x64 system.";
+                    return false;
+                }
+
                 if (processMachine == ImageFileMachineI386)
                 {
-                    error = "The selected game is 32-bit. The standalone FPS monitor currently supports 64-bit DirectX games.";
-                    return false;
+                    is32Bit = true;
+                    return true;
                 }
 
                 if (processMachine is not (ImageFileMachineUnknown or ImageFileMachineAmd64))
@@ -48,21 +56,10 @@ internal static class NativeProcessInjector
                     return false;
                 }
 
-                if (nativeMachine is not (ImageFileMachineUnknown or ImageFileMachineAmd64))
-                {
-                    error = "The selected game is not a native x64 process.";
-                    return false;
-                }
-
                 return true;
             }
 
-            if (IsWow64Process(process, out var isWow64) && isWow64)
-            {
-                error = "The selected game is 32-bit. The standalone FPS monitor currently supports 64-bit DirectX games.";
-                return false;
-            }
-
+            is32Bit = IsWow64Process(process, out var isWow64) && isWow64;
             return true;
         }
         finally
@@ -71,17 +68,13 @@ internal static class NativeProcessInjector
         }
     }
 
-    public static bool Inject(int processId, string dllPath, out string error)
+    /// <param name="target32Bit">The target is a 32-bit process: dllPath must be the x86 helper.</param>
+    public static bool Inject(int processId, string dllPath, bool target32Bit, out string error)
     {
         error = string.Empty;
         if (!File.Exists(dllPath))
         {
             error = "The built-in FPS monitor DLL is missing.";
-            return false;
-        }
-
-        if (!IsSupportedArchitecture(processId, out error))
-        {
             return false;
         }
 
@@ -116,17 +109,33 @@ internal static class NativeProcessInjector
                 return false;
             }
 
-            var localKernel32 = GetModuleHandle("kernel32.dll");
-            var localLoadLibrary = GetProcAddress(localKernel32, "LoadLibraryW");
             var remoteKernel32 = FindRemoteModuleBase(processId, "kernel32.dll");
-            if (localKernel32 == IntPtr.Zero || localLoadLibrary == IntPtr.Zero || remoteKernel32 == IntPtr.Zero)
+            IntPtr remoteLoadLibrary;
+            if (remoteKernel32 == IntPtr.Zero)
+            {
+                remoteLoadLibrary = IntPtr.Zero;
+            }
+            else if (target32Bit)
+            {
+                // Our own kernel32 is 64-bit, so read the export offset from the 32-bit one on disk.
+                var rva = ReadExportRva(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.SystemX86), "kernel32.dll"), "LoadLibraryW");
+                remoteLoadLibrary = rva > 0 ? new IntPtr(remoteKernel32.ToInt64() + rva) : IntPtr.Zero;
+            }
+            else
+            {
+                var localKernel32 = GetModuleHandle("kernel32.dll");
+                var localLoadLibrary = GetProcAddress(localKernel32, "LoadLibraryW");
+                remoteLoadLibrary = localKernel32 == IntPtr.Zero || localLoadLibrary == IntPtr.Zero
+                    ? IntPtr.Zero
+                    : new IntPtr(remoteKernel32.ToInt64() + (localLoadLibrary.ToInt64() - localKernel32.ToInt64()));
+            }
+
+            if (remoteLoadLibrary == IntPtr.Zero)
             {
                 error = "Could not locate LoadLibraryW in the target process.";
                 return false;
             }
 
-            var loadLibraryOffset = localLoadLibrary.ToInt64() - localKernel32.ToInt64();
-            var remoteLoadLibrary = new IntPtr(remoteKernel32.ToInt64() + loadLibraryOffset);
             remoteThread = CreateRemoteThread(process, IntPtr.Zero, 0, remoteLoadLibrary, remotePath, 0, IntPtr.Zero);
             if (remoteThread == IntPtr.Zero)
             {
@@ -162,6 +171,68 @@ internal static class NativeProcessInjector
 
             CloseHandle(process);
         }
+    }
+
+    /// <summary>RVA of a named export of a PE32 or PE32+ file (not forwarded), or -1.</summary>
+    private static int ReadExportRva(string path, string exportName)
+    {
+        var b = File.ReadAllBytes(path);
+        var pe = BitConverter.ToInt32(b, 0x3C);
+        var sectionCount = BitConverter.ToUInt16(b, pe + 6);
+        var optionalSize = BitConverter.ToUInt16(b, pe + 20);
+        var optional = pe + 24;
+        var directory = optional + (BitConverter.ToUInt16(b, optional) == 0x20B ? 112 : 96); // export table entry
+        var exportRva = BitConverter.ToUInt32(b, directory);
+        var exportSize = BitConverter.ToUInt32(b, directory + 4);
+        var sections = optional + optionalSize;
+
+        int FileOffset(uint rva)
+        {
+            for (var i = 0; i < sectionCount; i++)
+            {
+                var section = sections + i * 40;
+                var virtualSize = BitConverter.ToUInt32(b, section + 8);
+                var virtualAddress = BitConverter.ToUInt32(b, section + 12);
+                var rawSize = BitConverter.ToUInt32(b, section + 16);
+                var rawPointer = BitConverter.ToUInt32(b, section + 20);
+                if (rva >= virtualAddress && rva < virtualAddress + Math.Max(virtualSize, rawSize))
+                {
+                    return (int)(rva - virtualAddress + rawPointer);
+                }
+            }
+
+            return -1;
+        }
+
+        var table = exportRva == 0 ? -1 : FileOffset(exportRva);
+        if (table < 0)
+        {
+            return -1;
+        }
+
+        var nameCount = BitConverter.ToUInt32(b, table + 24);
+        var functions = FileOffset(BitConverter.ToUInt32(b, table + 28));
+        var names = FileOffset(BitConverter.ToUInt32(b, table + 32));
+        var ordinals = FileOffset(BitConverter.ToUInt32(b, table + 36));
+        for (var i = 0; i < nameCount; i++)
+        {
+            var nameOffset = FileOffset(BitConverter.ToUInt32(b, names + i * 4));
+            var end = nameOffset;
+            while (b[end] != 0)
+            {
+                end++;
+            }
+
+            if (System.Text.Encoding.ASCII.GetString(b, nameOffset, end - nameOffset) != exportName)
+            {
+                continue;
+            }
+
+            var rva = BitConverter.ToUInt32(b, functions + BitConverter.ToUInt16(b, ordinals + i * 2) * 4);
+            return rva >= exportRva && rva < exportRva + exportSize ? -1 : (int)rva; // inside the table = forwarded
+        }
+
+        return -1;
     }
 
     private static IntPtr FindRemoteModuleBase(int processId, string moduleName)
