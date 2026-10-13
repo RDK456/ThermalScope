@@ -33,6 +33,10 @@ public sealed class GameMonitorService : IDisposable
     private string? _lastError;
     private string? _currentExecutable;
     private bool _limiterOn = true;
+    private EtwFpsMonitor? _etw;                     // FPS of anti-cheat games, read from Windows instead of a helper
+    private int _protectionPid;
+    private string? _protectionReason;
+    private DateTime _protectionCheckedUtc;
 
     public GameMonitorService()
     {
@@ -259,7 +263,22 @@ public sealed class GameMonitorService : IDisposable
             // Releases the limiter inside the game before the process goes away.
             _fpsMonitor?.Dispose();
             _fpsMonitor = null;
+            _etw?.Dispose();
+            _etw = null;
         }
+    }
+
+    /// <summary>Why the helper must stay out of this process (anti-cheat, Windows process...), or null when it may attach.</summary>
+    private string? ProtectionReason(int processId)
+    {
+        if (processId != _protectionPid || (DateTime.UtcNow - _protectionCheckedUtc).TotalSeconds > 10)
+        {
+            _protectionPid = processId;
+            _protectionReason = AntiCheatGuard.FindBlocker(processId);
+            _protectionCheckedUtc = DateTime.UtcNow;
+        }
+
+        return _protectionReason;
     }
 
     private async Task WaitForNextTickAsync(CancellationToken cancellationToken)
@@ -326,6 +345,8 @@ public sealed class GameMonitorService : IDisposable
         var available = monitor?.IsAvailable == true;
         var consent = AppSettings.Current.FpsConsentAccepted;
         var consentRequired = false;
+        var protectedGame = false;
+        var needsAdmin = false;
         string status;
         string? error = _lastError;
 
@@ -345,6 +366,24 @@ public sealed class GameMonitorService : IDisposable
         {
             StopMonitor(monitor);
             status = $"{executable} is running. Automatic pacing is off.";
+        }
+        else if (ProtectionReason(target.ProcessId) is not null)
+        {
+            // Anti-cheat: never inject. FPS still works through Windows' own Present events; limiting does not.
+            StopMonitor(monitor);
+            protectedGame = true;
+            _etw ??= new EtwFpsMonitor();
+            if (_etw.TryStart(out var etwError))
+            {
+                status = $"Watching {executable}. It has anti-cheat, so FPS comes from Windows and the frame limiter is off.";
+                error = null;
+            }
+            else
+            {
+                needsAdmin = !EtwFpsMonitor.CanTrace;
+                status = $"{executable} has anti-cheat, so the frame limiter is off. {etwError}";
+                error = null;
+            }
         }
         else if (!available)
         {
@@ -405,7 +444,13 @@ public sealed class GameMonitorService : IDisposable
 
         FpsSample? sample = null;
         var frameTimes = Array.Empty<float>();
-        if (_monitorAttached && target is not null && monitor is not null)
+        if (protectedGame && target is not null && _etw is not null)
+        {
+            sample = _etw.ReadFps(target.ProcessId);
+            frameTimes = _etw.ReadFrameTimes(target.ProcessId, GraphFrames);
+            target = target with { Fps = sample };
+        }
+        else if (_monitorAttached && target is not null && monitor is not null)
         {
             sample = monitor.ReadFps(target.ProcessId);
             frameTimes = monitor.ReadFrameTimes(target.ProcessId, GraphFrames);
@@ -421,7 +466,7 @@ public sealed class GameMonitorService : IDisposable
             autoMonitor,
             available,
             _monitorAttached,
-            _monitorAttached && monitor?.IsHookReady == true,
+            protectedGame ? sample is not null : _monitorAttached && monitor?.IsHookReady == true,
             consentRequired,
             storedLimit,
             limiterOn,
@@ -429,7 +474,9 @@ public sealed class GameMonitorService : IDisposable
             status,
             error,
             _monitorAttached ? monitor?.RefreshHz ?? 0 : 0,
-            pacingLocked);
+            pacingLocked,
+            protectedGame,
+            needsAdmin);
     }
 
     private void RefreshDetectedGame()

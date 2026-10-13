@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using ThermalScope.Controls;
 
 namespace ThermalScope;
 
@@ -40,6 +41,25 @@ public partial class OverlayWindow : Window
     /// <summary>"Auto" (follows the game window) or a fixed percentage such as "130%".</summary>
     public string ScaleSetting { get; set; } = "Auto";
 
+    /// <summary>One of OverlayContent.Positions: where in the game window the overlay sits.</summary>
+    public string Position { get; set; } = "TopCenter";
+
+    private string? _configKey;
+
+    /// <summary>Rebuilds the visual when the user's style, items or opacity changed.</summary>
+    public void Configure(OverlayConfig config)
+    {
+        if (config.Key == _configKey)
+        {
+            return;
+        }
+
+        _configKey = config.Key;
+        Pill.Child = OverlayContent.Build(config);
+        _appliedScale = 0;
+        _lastX = int.MinValue;
+    }
+
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
@@ -73,7 +93,8 @@ public partial class OverlayWindow : Window
             _lastX = int.MinValue;
         }
 
-        ApplyScale(gameWidth);
+        Opacity = 1;
+        ApplyScale(gameWidth, rect.Bottom - rect.Top);
         Reposition(rect);
     }
 
@@ -82,6 +103,18 @@ public partial class OverlayWindow : Window
         if (IsVisible)
         {
             Hide();
+        }
+    }
+
+    /// <summary>
+    /// For when the player only looks elsewhere (another monitor, alt-tab): make the strip invisible but keep the
+    /// window. Hiding and re-showing a topmost window makes Windows recompose the game's display, which costs frames.
+    /// </summary>
+    public void DimOverlay()
+    {
+        if (IsVisible)
+        {
+            Opacity = 0;
         }
     }
 
@@ -122,7 +155,7 @@ public partial class OverlayWindow : Window
         }
     }
 
-    private void ApplyScale(int gameWidthPixels)
+    private void ApplyScale(int gameWidthPixels, int gameHeightPixels)
     {
         var dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
         double scale;
@@ -142,12 +175,13 @@ public partial class OverlayWindow : Window
             Pill.LayoutTransform = new ScaleTransform(scale, scale);
             Pill.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
 
-            // Never wider than the game window: shrink to fit.
+            // Never larger than the game window: shrink to fit (the vertical styles are tall, the pill is wide).
             var widthPixels = Pill.DesiredSize.Width * dpi;
-            var limit = gameWidthPixels * 0.96;
-            if (widthPixels > limit)
+            var heightPixels = Pill.DesiredSize.Height * dpi;
+            var fit = Math.Min(gameWidthPixels * 0.96 / Math.Max(widthPixels, 1), gameHeightPixels * 0.9 / Math.Max(heightPixels, 1));
+            if (fit < 1)
             {
-                scale *= limit / widthPixels;
+                scale *= fit;
                 Pill.LayoutTransform = new ScaleTransform(scale, scale);
             }
 
@@ -168,9 +202,16 @@ public partial class OverlayWindow : Window
         GetWindowRect(_handle, out var own);
         var width = own.Right - own.Left;
         var dpi = VisualTreeHelper.GetDpi(this).DpiScaleY;
+        var height = own.Bottom - own.Top;
         var gameWidth = game.Right - game.Left;
-        var x = game.Left + Math.Max(0, (gameWidth - width) / 2);
-        var y = game.Top + (int)Math.Round(6 * dpi);
+        var gameHeight = game.Bottom - game.Top;
+        var margin = (int)Math.Round(6 * dpi); // the Pill's own 10 px margin adds to this
+        var x = Position.EndsWith("Left", StringComparison.Ordinal) ? game.Left + margin
+            : Position.EndsWith("Right", StringComparison.Ordinal) ? game.Right - width - margin
+            : game.Left + Math.Max(0, (gameWidth - width) / 2);
+        var y = Position.StartsWith("Top", StringComparison.Ordinal) ? game.Top + margin
+            : Position.StartsWith("Bottom", StringComparison.Ordinal) ? game.Bottom - height - margin
+            : game.Top + Math.Max(0, (gameHeight - height) / 2);
         if (x == _lastX && y == _lastY)
         {
             return; // nothing moved: skip the SetWindowPos

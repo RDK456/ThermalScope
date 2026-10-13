@@ -17,6 +17,10 @@ public sealed class AppSettings
     public bool CloseToTray { get; set; }
     public bool OverlayEnabled { get; set; } = true;
     public string OverlayScale { get; set; } = "Auto";
+    public string OverlayStyle { get; set; } = "Pill";
+    public string OverlayPosition { get; set; } = "TopCenter";
+    public int OverlayOpacity { get; set; } = 90;
+    public List<string> OverlayItems { get; set; } = new() { "Fps", "Graph", "CpuLoad", "CpuTemp", "GpuLoad", "GpuTemp" };
     public bool AutoCheckUpdates { get; set; } = true;
     public DateTimeOffset? LastUpdateCheck { get; set; }
     public string Style { get; set; } = "Scope";

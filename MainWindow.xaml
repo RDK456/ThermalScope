@@ -311,18 +311,10 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel>
-                    <!-- Limit -->
+                    <!-- Game -->
                     <c:Card Padding="22,18">
                         <StackPanel>
-                            <Grid>
-                                <TextBlock Text="Frame limit" Style="{StaticResource CardTitle}" />
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                    <TextBlock Text="Limiter" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,10,0" />
-                                    <ToggleButton x:Name="LimiterSwitch" Style="{StaticResource SwitchToggle}" Click="LimiterSwitch_Click"
-                                                  IsChecked="{Binding LimiterEnabled, Mode=OneWay}"
-                                                  AutomationProperties.Name="Frame limiter on or off" ToolTip="Pause or resume the limiter" />
-                                </StackPanel>
-                            </Grid>
+                            <TextBlock Text="Game" Style="{StaticResource CardTitle}" />
 
                             <Grid Margin="0,14,0,0">
                                 <Grid.ColumnDefinitions>
@@ -331,7 +323,7 @@
                                 </Grid.ColumnDefinitions>
                                 <StackPanel>
                                     <TextBlock Style="{StaticResource Caption}">
-                                        <Run Text="Limiting" />
+                                        <Run Text="Watching" />
                                     </TextBlock>
                                     <TextBlock Text="{Binding GameName}" Style="{StaticResource Metric}" FontSize="22" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
                                     <TextBlock Text="{Binding DetectionText}" Style="{StaticResource Faint}" Margin="0,2,0,0" TextWrapping="Wrap" />
@@ -383,6 +375,41 @@
                                 <TextBlock Text="{Binding ErrorText}" TextWrapping="Wrap" />
                             </Border>
 
+                            <Border Style="{StaticResource Banner}" Margin="0,14,0,0" Visibility="{Binding NeedsAdmin, Converter={StaticResource B2V}}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,16,0"
+                                               Text="This game has anti-cheat, so nothing is loaded into it. To show its FPS, ThermalScope reads Windows' own frame events, which needs administrator rights." />
+                                    <Button Grid.Column="1" Content="Restart as admin" Style="{StaticResource PrimaryButton}" Click="RestartAdmin_Click"
+                                            VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+
+                            <TextBlock Text="{Binding StatusText}" Style="{StaticResource Caption}" Margin="0,14,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </c:Card>
+
+                    <!-- Section 1: frame limiter -->
+                    <TextBlock Text="FRAME LIMITER" Style="{StaticResource Caption}" FontWeight="SemiBold" Margin="4,22,0,8" />
+                    <c:Card Padding="22,18">
+                        <StackPanel>
+                            <Grid>
+                                <TextBlock Text="Frame limit" Style="{StaticResource CardTitle}" />
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                    <TextBlock Text="Limiter" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                    <ToggleButton x:Name="LimiterSwitch" Style="{StaticResource SwitchToggle}" Click="LimiterSwitch_Click"
+                                                  IsChecked="{Binding LimiterEnabled, Mode=OneWay}" IsEnabled="{Binding CanLimit}"
+                                                  AutomationProperties.Name="Frame limiter on or off" ToolTip="Pause or resume the limiter" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock Text="Not available for this game: it has anti-cheat, and ThermalScope never loads a helper into those. Use the game's own FPS cap."
+                                       Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,8,0,0"
+                                       Visibility="{Binding ProtectedGame, Converter={StaticResource B2V}}" />
+
+                            <StackPanel IsEnabled="{Binding CanLimit}">
                             <TextBlock Text="Target frame rate" Style="{StaticResource Caption}" Margin="0,18,0,8" />
                             <StackPanel Orientation="Horizontal">
                                 <Button Content="&#x2212;" Style="{StaticResource GhostButton}" Width="40" Padding="0" FontSize="18" Click="StepDown_Click"
@@ -419,8 +446,96 @@
                                              ToolTip="Console-style: the display's refresh sets the pace (targets that divide the refresh rate, DirectX 10/11/12)" />
                             </StackPanel>
                             <TextBlock Text="{Binding PacingHint}" Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                            </StackPanel>
+                        </StackPanel>
+                    </c:Card>
 
-                            <TextBlock Text="{Binding StatusText}" Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap" />
+                    <!-- Section 2: FPS and temperature monitor, overlay -->
+                    <TextBlock Text="MONITOR AND OVERLAY" Style="{StaticResource Caption}" FontWeight="SemiBold" Margin="4,22,0,8" />
+                    <c:Card Padding="22,18">
+                        <StackPanel>
+                            <Grid>
+                                <StackPanel HorizontalAlignment="Left">
+                                    <TextBlock Text="In-game overlay" Style="{StaticResource CardTitle}" />
+                                    <TextBlock Text="Pick a look, a corner and what to show. Works with every game, anti-cheat ones too."
+                                               Style="{StaticResource Faint}" TextWrapping="Wrap" MaxWidth="460" Margin="0,4,0,0" />
+                                </StackPanel>
+                                <ToggleButton x:Name="OverlaySwitch" Style="{StaticResource SwitchToggle}" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                              Click="OverlaySwitch_Click" AutomationProperties.Name="In-game overlay" />
+                            </Grid>
+
+                            <!-- Stage: a miniature game window; the overlay previews where it will sit. -->
+                            <Grid Margin="0,16,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Border Height="176" CornerRadius="10" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" ClipToBounds="True">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#1B2230" Offset="0" />
+                                            <GradientStop Color="#0E1118" Offset="1" />
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <Grid>
+                                        <TextBlock Text="game window" Foreground="#2A3242" FontSize="22" FontWeight="SemiBold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        <Viewbox x:Name="PreviewHost" Stretch="Uniform" StretchDirection="DownOnly" Margin="10"
+                                                 HorizontalAlignment="Center" VerticalAlignment="Top" />
+                                    </Grid>
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="Position" Style="{StaticResource Caption}" Margin="0,0,0,8" HorizontalAlignment="Center" />
+                                    <UniformGrid x:Name="OverlayPositionPad" Columns="3" Rows="3" Width="132" Height="96">
+                                        <RadioButton Tag="TopLeft" Content="&#x2196;" ToolTip="Top left" />
+                                        <RadioButton Tag="TopCenter" Content="&#x2191;" ToolTip="Top centre" />
+                                        <RadioButton Tag="TopRight" Content="&#x2197;" ToolTip="Top right" />
+                                        <RadioButton Tag="MiddleLeft" Content="&#x2190;" ToolTip="Middle left" />
+                                        <Border />
+                                        <RadioButton Tag="MiddleRight" Content="&#x2192;" ToolTip="Middle right" />
+                                        <RadioButton Tag="BottomLeft" Content="&#x2199;" ToolTip="Bottom left" />
+                                        <RadioButton Tag="BottomCenter" Content="&#x2193;" ToolTip="Bottom centre" />
+                                        <RadioButton Tag="BottomRight" Content="&#x2198;" ToolTip="Bottom right" />
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Grid>
+
+                            <TextBlock Text="Look" Style="{StaticResource Caption}" Margin="0,18,0,6" />
+                            <WrapPanel x:Name="OverlayStyleChips">
+                                <RadioButton Content="Pill" Tag="Pill" GroupName="OverlayStyle" Style="{StaticResource ChipRadio}" Click="OverlayStyle_Click" Margin="0,0,6,6" ToolTip="One rounded line" />
+                                <RadioButton Content="Panel" Tag="Panel" GroupName="OverlayStyle" Style="{StaticResource ChipRadio}" Click="OverlayStyle_Click" Margin="0,0,6,6" ToolTip="Vertical card, one reading per row" />
+                                <RadioButton Content="Compact" Tag="Compact" GroupName="OverlayStyle" Style="{StaticResource ChipRadio}" Click="OverlayStyle_Click" Margin="0,0,6,6" ToolTip="Small single line" />
+                                <RadioButton Content="Text only" Tag="Text" GroupName="OverlayStyle" Style="{StaticResource ChipRadio}" Click="OverlayStyle_Click" Margin="0,0,6,6" ToolTip="No background, just outlined text" />
+                            </WrapPanel>
+
+                            <TextBlock Text="Show" Style="{StaticResource Caption}" Margin="0,10,0,6" />
+                            <WrapPanel x:Name="OverlayItemChips" />
+
+                            <Grid Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Background" Style="{StaticResource Caption}" Margin="0,0,0,6" />
+                                    <WrapPanel x:Name="OverlayOpacityChips">
+                                        <RadioButton Content="Clear" Tag="30" GroupName="OverlayOpacity" Style="{StaticResource ChipRadio}" Click="OverlayOpacity_Click" Margin="0,0,6,6" />
+                                        <RadioButton Content="Light" Tag="60" GroupName="OverlayOpacity" Style="{StaticResource ChipRadio}" Click="OverlayOpacity_Click" Margin="0,0,6,6" />
+                                        <RadioButton Content="Medium" Tag="90" GroupName="OverlayOpacity" Style="{StaticResource ChipRadio}" Click="OverlayOpacity_Click" Margin="0,0,6,6" />
+                                        <RadioButton Content="Solid" Tag="100" GroupName="OverlayOpacity" Style="{StaticResource ChipRadio}" Click="OverlayOpacity_Click" Margin="0,0,6,6" />
+                                    </WrapPanel>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="Size" Style="{StaticResource Caption}" Margin="0,0,0,6" />
+                                    <WrapPanel x:Name="OverlayScaleChips">
+                                        <RadioButton Content="Auto" Tag="Auto" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" ToolTip="Scales with the game window" />
+                                        <RadioButton Content="80%" Tag="80%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
+                                        <RadioButton Content="100%" Tag="100%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
+                                        <RadioButton Content="130%" Tag="130%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
+                                        <RadioButton Content="170%" Tag="170%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Grid>
                         </StackPanel>
                     </c:Card>
 
@@ -484,9 +599,9 @@
                 <StackPanel Grid.Column="2">
                     <c:Card Padding="20,18">
                         <StackPanel>
-                            <TextBlock Text="Cooler while limited" Style="{StaticResource CardTitle}" />
+                            <TextBlock Text="Temperatures" Style="{StaticResource CardTitle}" />
                             <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,4,0,12"
-                                       Text="A lower frame target means less GPU work, so temperatures, power and fan noise drop." />
+                                       Text="Live CPU and GPU readings. A lower frame limit means less GPU work, so temperatures, power and fan noise drop." />
                             <Grid DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -538,7 +653,7 @@
                         <StackPanel>
                             <TextBlock Text="What works" Style="{StaticResource CardTitle}" />
                             <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,8,0,0" LineHeight="20"
-                                       Text="DirectX 9, 10, 11 and 12 games, 32-bit and 64-bit, in borderless fullscreen, from Steam, other stores or a plain executable. Games with anti-cheat (Easy Anti-Cheat, BattlEye, Vanguard) are skipped on purpose. Vulkan and OpenGL are not supported." />
+                                       Text="DirectX 9, 10, 11 and 12 games, 32-bit and 64-bit, in borderless fullscreen, from Steam, other stores or a plain executable. Games with anti-cheat (Easy Anti-Cheat, BattlEye, Vanguard) get the overlay and FPS readout only, with nothing loaded into them (needs administrator rights); the frame limiter is off there. Vulkan and OpenGL are not supported." />
                         </StackPanel>
                     </c:Card>
                 </StackPanel>
@@ -659,22 +774,6 @@
                                     </StackPanel>
                                     <ToggleButton x:Name="TraySwitch" Style="{StaticResource SwitchToggle}" HorizontalAlignment="Right" Click="TraySwitch_Click" AutomationProperties.Name="Close to tray" />
                                 </Grid>
-                                <Grid Margin="0,12,0,0">
-                                    <StackPanel HorizontalAlignment="Left">
-                                        <TextBlock Text="In-game overlay" FontWeight="SemiBold" />
-                                        <TextBlock Text="FPS, frame line, CPU and GPU strip over the game." Style="{StaticResource Faint}" TextWrapping="Wrap" MaxWidth="260" />
-                                    </StackPanel>
-                                    <ToggleButton x:Name="OverlaySwitch" Style="{StaticResource SwitchToggle}" HorizontalAlignment="Right" Click="OverlaySwitch_Click" AutomationProperties.Name="In-game overlay" />
-                                </Grid>
-                                <TextBlock Text="Overlay size" Style="{StaticResource Caption}" Margin="0,16,0,6" />
-                                <WrapPanel x:Name="OverlayScaleChips">
-                                    <RadioButton Content="Auto" Tag="Auto" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" ToolTip="Scales with the game window" />
-                                    <RadioButton Content="80%" Tag="80%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
-                                    <RadioButton Content="100%" Tag="100%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
-                                    <RadioButton Content="130%" Tag="130%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
-                                    <RadioButton Content="170%" Tag="170%" GroupName="OverlayScale" Style="{StaticResource ChipRadio}" Click="OverlayScale_Click" Margin="0,0,6,6" />
-                                </WrapPanel>
-
                                 <Rectangle Height="1" Fill="{DynamicResource LineBrush}" Margin="0,18,0,6" />
                                 <TextBlock Text="Updates" Style="{StaticResource Caption}" Margin="0,8,0,6" />
                                 <TextBlock x:Name="UpdateStatus" Style="{StaticResource Faint}" TextWrapping="Wrap" />

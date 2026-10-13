@@ -68,6 +68,35 @@ public class HookIntegrationTests
         }
     }
 
+    [Theory]
+    [InlineData("testgame.exe")]
+    [InlineData("testgame9_32.exe")]
+    public void Etw_reads_fps_without_a_helper(string exe)
+    {
+        var folder = Environment.GetEnvironmentVariable("THERMALSCOPE_TESTGAMES");
+        if (string.IsNullOrEmpty(folder) || !File.Exists(Path.Combine(folder, exe)) || !EtwFpsMonitor.CanTrace)
+        {
+            return; // needs an elevated test run
+        }
+
+        using var game = Process.Start(Path.Combine(folder, exe))!;
+        try
+        {
+            using var etw = new EtwFpsMonitor();
+            Assert.True(etw.TryStart(out var error), error);
+            Thread.Sleep(3000);
+            var sample = etw.ReadFps(game.Id);
+            _output.WriteLine($"{exe}: {sample?.Average:0.0} fps, frame {sample?.FrameTimeMs:0.00} ms");
+            Assert.NotNull(sample);
+            Assert.True(sample.Value.Average > 30, $"unexpected {sample.Value.Average} fps");
+            Assert.NotEmpty(etw.ReadFrameTimes(game.Id, 60));
+        }
+        finally
+        {
+            game.Kill();
+        }
+    }
+
     private static double Jitter(GameFpsMonitor monitor, int pid)
     {
         var frames = monitor.ReadFrameTimes(pid, 120);

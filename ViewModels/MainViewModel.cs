@@ -238,6 +238,8 @@ public sealed class PacerViewModel : Bindable
     private string _statusText = "Waiting for a game.";
     private string _errorText = string.Empty;
     private bool _consentRequired;
+    private bool _protectedGame;
+    private bool _needsAdmin;
     private string _targetInput = string.Empty;
     private bool _isEditing;
     private int _targetFps;
@@ -273,6 +275,9 @@ public sealed class PacerViewModel : Bindable
     public string ErrorText { get => _errorText; private set { if (Set(ref _errorText, value)) Raise(nameof(HasError)); } }
     public bool HasError => !string.IsNullOrWhiteSpace(_errorText);
     public bool ConsentRequired { get => _consentRequired; private set => Set(ref _consentRequired, value); }
+    public bool ProtectedGame { get => _protectedGame; private set { if (Set(ref _protectedGame, value)) Raise(nameof(CanLimit)); } }
+    public bool CanLimit => !_protectedGame;
+    public bool NeedsAdmin { get => _needsAdmin; private set => Set(ref _needsAdmin, value); }
     public string TargetInput { get => _targetInput; set => Set(ref _targetInput, value); }
     public int TargetFps { get => _targetFps; private set => Set(ref _targetFps, value); }
     public bool LimiterEnabled { get => _limiterEnabled; private set => Set(ref _limiterEnabled, value); }
@@ -323,6 +328,8 @@ public sealed class PacerViewModel : Bindable
         StatusText = snapshot.Status;
         ErrorText = snapshot.Error ?? string.Empty;
         ConsentRequired = snapshot.ConsentRequired;
+        ProtectedGame = snapshot.ProtectedGame;
+        NeedsAdmin = snapshot.NeedsAdmin;
         LimiterEnabled = snapshot.LimiterEnabled;
         TargetFps = snapshot.TargetFps;
         IsLive = snapshot.MonitorReady;

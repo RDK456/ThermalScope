@@ -27,4 +27,6 @@ public sealed record GameMonitorSnapshot(
     string Status,
     string? Error = null,
     int RefreshHz = 0,
-    bool PacingLocked = false);
+    bool PacingLocked = false,
+    bool ProtectedGame = false,
+    bool NeedsAdmin = false);

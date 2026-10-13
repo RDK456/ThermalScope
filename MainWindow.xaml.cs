@@ -7,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shell;
+using ThermalScope.Controls;
 using ThermalScope.Models;
 using ThermalScope.Services;
 using ThermalScope.ViewModels;
@@ -115,6 +116,7 @@ public partial class MainWindow : Window
         SelectChip(GaugeChips, _settings.GaugeMode);
         SelectChip(ScaleChips, _settings.UiScale);
         SelectChip(OverlayScaleChips, _settings.OverlayScale);
+        BuildOverlayControls();
         StartupSwitch.IsChecked = StartupManager.IsEnabled;
         StartupSwitch.IsEnabled = StartupManager.CanEnable;
         TraySwitch.IsChecked = _settings.CloseToTray;
@@ -229,7 +231,13 @@ public partial class MainWindow : Window
         {
             _overlay ??= new OverlayWindow(_vm);
             _overlay.ScaleSetting = _settings.OverlayScale;
+            _overlay.Position = _settings.OverlayPosition;
+            _overlay.Configure(OverlayConfigNow());
             _overlay.ShowFor(snapshot.SelectedProcess!.ProcessId);
+        }
+        else if (_settings.OverlayEnabled && snapshot.MonitorReady)
+        {
+            _overlay?.DimOverlay(); // game still running, just not in front
         }
         else
         {
@@ -371,6 +379,110 @@ public partial class MainWindow : Window
             _settings.OverlayScale = tag;
             _settings.Save();
             _game.RequestRefresh();
+        }
+    }
+
+    private OverlayConfig OverlayConfigNow() => new(_settings.OverlayStyle, _settings.OverlayItems, _settings.OverlayOpacity);
+
+    private void BuildOverlayControls()
+    {
+        if (!OverlayContent.Styles.Contains(_settings.OverlayStyle))
+        {
+            _settings.OverlayStyle = "Pill";
+        }
+
+        if (!OverlayContent.Positions.Contains(_settings.OverlayPosition))
+        {
+            _settings.OverlayPosition = "TopCenter";
+        }
+
+        foreach (var (key, label) in OverlayContent.ItemList)
+        {
+            var chip = new ToggleButton
+            {
+                Content = label,
+                Tag = key,
+                Style = (Style)FindResource("ChipToggle"),
+                Margin = new Thickness(0, 0, 6, 6),
+                IsChecked = _settings.OverlayItems.Contains(key)
+            };
+            chip.Click += OverlayItem_Click;
+            OverlayItemChips.Children.Add(chip);
+        }
+
+        foreach (var cell in OverlayPositionPad.Children.OfType<RadioButton>())
+        {
+            cell.Style = (Style)FindResource("ChipRadio");
+            cell.GroupName = "OverlayPosition";
+            cell.Margin = new Thickness(2);
+            cell.Padding = new Thickness(0);
+            cell.FontSize = 15;
+            cell.HorizontalContentAlignment = HorizontalAlignment.Center;
+            cell.IsChecked = (string?)cell.Tag == _settings.OverlayPosition;
+            cell.Click += OverlayPosition_Click;
+        }
+
+        PreviewHost.DataContext = _vm; // the card itself sits under the Pacer view model
+        SelectChip(OverlayStyleChips, _settings.OverlayStyle);
+        SelectChip(OverlayOpacityChips, _settings.OverlayOpacity.ToString(CultureInfo.InvariantCulture));
+        RefreshOverlayPreview();
+    }
+
+    private void RefreshOverlayPreview()
+    {
+        PreviewHost.Child = OverlayContent.Build(OverlayConfigNow());
+        var position = _settings.OverlayPosition;
+        PreviewHost.HorizontalAlignment = position.EndsWith("Left", StringComparison.Ordinal) ? HorizontalAlignment.Left
+            : position.EndsWith("Right", StringComparison.Ordinal) ? HorizontalAlignment.Right : HorizontalAlignment.Center;
+        PreviewHost.VerticalAlignment = position.StartsWith("Top", StringComparison.Ordinal) ? VerticalAlignment.Top
+            : position.StartsWith("Bottom", StringComparison.Ordinal) ? VerticalAlignment.Bottom : VerticalAlignment.Center;
+    }
+
+    private void OverlayOptionChanged()
+    {
+        _settings.Save();
+        RefreshOverlayPreview();
+        _game.RequestRefresh();
+    }
+
+    private void OverlayStyle_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            _settings.OverlayStyle = tag;
+            OverlayOptionChanged();
+        }
+    }
+
+    private void OverlayPosition_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag })
+        {
+            _settings.OverlayPosition = tag;
+            OverlayOptionChanged();
+        }
+    }
+
+    private void OverlayOpacity_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string tag } && int.TryParse(tag, out var opacity))
+        {
+            _settings.OverlayOpacity = opacity;
+            OverlayOptionChanged();
+        }
+    }
+
+    private void OverlayItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is ToggleButton { Tag: string key } chip)
+        {
+            _settings.OverlayItems.Remove(key);
+            if (chip.IsChecked == true)
+            {
+                _settings.OverlayItems.Add(key);
+            }
+
+            OverlayOptionChanged();
         }
     }
 
